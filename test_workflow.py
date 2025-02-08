@@ -1,6 +1,6 @@
 import asyncio
 from typing import Dict, Any
-from src.workflow.case_discussion_worflow import CaseDiscussionGraph
+from src.workflow.case_discussion_workflow import CaseDiscussionWorkflow
 
 # Test case content
 TEST_CASE = """
@@ -33,7 +33,7 @@ Questions for Discussion:
 
 async def run_discussion():
     # Initialize the graph
-    discussion = CaseDiscussionGraph()
+    discussion = CaseDiscussionWorkflow()
     
     # Run the workflow
     try:
@@ -41,16 +41,24 @@ async def run_discussion():
         
         # Print results
         print("\n=== Discussion Results ===")
-        print("\nMessages:")
-        for msg in result["messages"]:
-            print(f"\n{msg['role'].upper()}: {msg['content']}")
+        print("\nDiscussions:")
+        for msg in result["discussions"]:
+            print(f"\n{msg}")
         
-        print("\nKey Insights:")
-        for insight in result["insights"]:
-            print(f"- {insight}")
-        
-        print("\nEvaluation:")
-        print(result["evaluation"])
+        print("\nPersonas:")
+        for persona in result["personas"]:
+            print(f"\n{persona}")
+            
+        print("\nDiscussion Plan:")
+        print(result["discussion_plan"])
+            
+        print("\nSummaries:")
+        for summary in result["summaries"]:
+            print(f"- {summary}")
+            
+        print("\nEvaluations:")
+        for eval in result["evaluations"]:
+            print(f"- {eval}")
             
     except Exception as e:
         print(f"Error running discussion: {e}")

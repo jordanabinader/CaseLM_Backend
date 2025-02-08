@@ -1,7 +1,17 @@
 from typing import Dict, Any, List
+from langchain_openai import ChatOpenAI
+from langchain.schema import SystemMessage, HumanMessage
 from .base_agent import BaseAgent
+from src.config.settings import settings
 
 class PersonaCreatorAgent(BaseAgent):
+    def __init__(self):
+        self.llm = ChatOpenAI(
+            model=settings.openai_model,
+            temperature=0.7,
+            api_key=settings.openai_api_key
+        )
+
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         response = await self.llm.ainvoke([
             SystemMessage(content="""You are the persona creator. Your role is to:
