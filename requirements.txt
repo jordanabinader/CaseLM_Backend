@@ -8,3 +8,5 @@ python-dotenv
 pyyaml
 langchain-community
 openai
+sqlalchemy
+psycopg2-binary
