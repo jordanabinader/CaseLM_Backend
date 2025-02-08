@@ -70,7 +70,7 @@ class CaseDiscussionWorkflow:
     def setup_edges(self):
         """Set up edges in the workflow graph"""
         
-        # Add conditional edges
+        # conditional edges
         self.workflow.add_edge_condition(
             "create_personas",
             self.persona_creation_condition
