@@ -4,8 +4,8 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 from src.config.settings import settings
 
-class PlannerAgent:
-    """Agent responsible for planning the case study discussion."""
+class TopicAgent:
+    """Agent responsible for topic selection for the case study discussion."""
     
     def __init__(self):
         self.llm = ChatOpenAI(
@@ -19,29 +19,32 @@ class PlannerAgent:
         #TODO: Use pydantic to validate the response
         # Get planner's output
         response = await self.llm.ainvoke([
-            SystemMessage(content="""You are the Planner, responsible for determining the sequence of personas in the discussion of each topic.
-            Your role is to create an engaging discussion flow by ordering the personas in a way that builds meaningful dialogue and insights.
-            DO NOT include the professor in the sequence. but make sure to include all other personas.
+            SystemMessage(content="""You are the Topic Planner, responsible for identifying the 3 most critical topics or core insights for this Harvard Business School case study discussion.
+            Your role is to create a focused roadmap covering the 3 most important aspects that will lead to meaningful learning outcomes.
+            For each of the 3 topics, you will:
+            1. Identify a key aspect of the case that warrants deep discussion
+            2. Develop questions that will drive meaningful debate
+            3. Outline expected insights students should discover
+            4. Structure the flow to build toward actionable conclusions
+                          
             You must respond with ONLY valid JSON in the following format:
             {
                 "plan": {
-                    "sequences": [
+                    "topics": [
                         {
-                            "topic_index": int,
-                            "persona_sequence": ["persona_id1", "persona_id2", "persona_id3"]
+                            "title": "string",
+                            "expected_insights": ["string"]
                         }
                     ],
+                    "sequence": [0, 1, 2],
                     "status": "created"
                 }
             }
             
-            The persona_sequence should list the IDs of personas in the order they should speak.
+            Ensure you provide exactly 3 topics in the response.
             Do not include any other text, explanations, or formatting - only the JSON object."""),
-            HumanMessage(content=f"""Create a discussion sequence for each topic.
-                Case content: {state['case_content']}
-                Topics: {state['topics']}
-                Available personas: {state['personas']}""")
-            ])
+            HumanMessage(content=f"Develop a focused three-topic discussion plan. Include cold-call opportunities, debate questions, and key moments for insight evaluation. Create a discussion plan for this case: {state['case_content']}")
+        ])
         
         # Parse JSON response with error handling
         import json
@@ -61,9 +64,10 @@ class PlannerAgent:
                 "messages": [
                     {
                         "role": "planner",
-                        "content": f"Discussion sequences created for {len(parsed_data['plan']['sequences'])} topics."
+                        "content": f"Discussion plan created with {len(parsed_data['plan']['topics'])} topics."
                     }
                 ]
             }
+            
         except json.JSONDecodeError as e:
             raise ValueError(f"Failed to parse LLM response as JSON: {e}")

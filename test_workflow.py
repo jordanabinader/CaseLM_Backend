@@ -35,34 +35,8 @@ async def run_discussion():
     # Initialize the graph
     discussion = CaseDiscussionWorkflow()
     
-    # Run the workflow
-    try:
-        result = await discussion.run(TEST_CASE)
+    result = await discussion.run(TEST_CASE)
         
-        # Print results
-        print("\n=== Discussion Results ===")
-        print("\nDiscussions:")
-        for msg in result["discussions"]:
-            print(f"\n{msg}")
-        
-        print("\nPersonas:")
-        for persona in result["personas"]:
-            print(f"\n{persona}")
-            
-        print("\nDiscussion Plan:")
-        print(result["discussion_plan"])
-            
-        print("\nSummaries:")
-        for summary in result["summaries"]:
-            print(f"- {summary}")
-            
-        print("\nEvaluations:")
-        for eval in result["evaluations"]:
-            print(f"- {eval}")
-            
-    except Exception as e:
-        print(f"Error running discussion: {e}")
-        raise
 
 if __name__ == "__main__":
     asyncio.run(run_discussion())
