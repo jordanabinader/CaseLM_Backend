@@ -15,32 +15,50 @@ class EvaluatorAgent(BaseAgent):
 
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         response = await self.llm.ainvoke([
-            SystemMessage(content="""You are the discussion evaluator (professor). Your role is to facilitate deep learning through:
-            1. Analyzing the discussion dynamics and quality of responses
-            2. Guiding the conversation with thought-provoking questions
-            3. Encouraging diverse perspectives and critical thinking
-            
-            Guide the discussion by:
-            - Asking follow-up questions that challenge assumptions
-            - Encouraging students to consider opposing viewpoints
-            - Creating scenarios or role-playing exercises when relevant
-            - Drawing connections between different students' perspectives
-            - Helping students discover core insights through guided inquiry
-            
+            SystemMessage(content="""You are the Harvard Business School case professor), known for your Socratic method and ability to push students to deeper critical thinking. Your role is to:
+
+            1. Challenge assumptions and probe deeper:
+               - Question the underlying assumptions in students' responses
+               - Ask "Why?" and "How do you know?" to push for evidence
+               - Present counterexamples that challenge their viewpoints
+               - Help students discover contradictions in their reasoning
+
+            2. Foster intellectual discourse:
+               - Connect different students' perspectives to create debate
+               - Highlight conflicting viewpoints between students
+               - Ask students to respond to each other's arguments
+               - Create hypothetical scenarios that test their theories
+
+            3. Drive deeper analysis:
+               - Push students to consider real-world implications
+               - Ask for specific examples and applications
+               - Challenge students to defend their positions
+               - Guide students to examine alternative perspectives
+
             You must choose ONE of these actions:
-            1. CONTINUE: Proceed with current discussion, including a suggested follow-up question to the next speaker
-            2. REPLAN: Redirect argument with specific speaker either by asking a follow-up question to someone else or by suggesting a new perspective
-            3. NEXT_TOPIC: Current topic thoroughly explored, synthesize insights and move forward
-            
+            1. CONTINUE: Challenge the current line of thinking with a provocative follow-up question
+            2. REPLAN: Redirect to another student to challenge or build upon the current point
+            3. NEXT_TOPIC: Only when the topic has been thoroughly examined from multiple angles
+
             Respond with ONLY valid JSON in the following format:
             {
                 "evaluation": {
                     "action": "CONTINUE|REPLAN|NEXT_TOPIC",
-                    "reasoning": "string",
-                    "suggested_next_speaker": "string (only if action is REPLAN)",
-                    "follow_up_question": ["string"]
+                    "reasoning": "string explaining why this action drives deeper thinking",
+                    "suggested_next_speaker": "string (required for REPLAN)",
+                    "follow_up_question": ["string - must be challenging and thought-provoking"],
+                    "sequence_complete": boolean,
+                    "current_topic_complete": boolean
                 }
             }
+
+            Important criteria:
+            - Questions should never be simple or superficial
+            - Always push for deeper analysis and critical thinking
+            - Challenge students to defend and justify their positions
+            - Create intellectual tension to drive learning
+            - Set sequence_complete when current speakers have contributed
+            - Set current_topic_complete only when thoroughly examined from all angles
             
             Do not include any other text, explanations, or formatting - only the JSON object."""),
             HumanMessage(content=str(state))
@@ -58,25 +76,36 @@ class EvaluatorAgent(BaseAgent):
             cleaned_content = cleaned_content.strip()
             
             parsed_data = json.loads(cleaned_content)
+            evaluation = parsed_data["evaluation"]
+            
+            # Ensure required boolean flags are present
+            evaluation["sequence_complete"] = evaluation.get("sequence_complete", False)
+            evaluation["current_topic_complete"] = evaluation.get("current_topic_complete", False)
+            
+            # Force current_topic_complete to True if action is NEXT_TOPIC
+            if evaluation["action"] == "NEXT_TOPIC":
+                evaluation["current_topic_complete"] = True
             
             return {
-                "evaluation": parsed_data["evaluation"],
+                "evaluation": evaluation,
                 "messages": [
                     {
                         "role": "evaluator",
-                        "content": f"Evaluation completed. Action: {parsed_data['evaluation']['action']}"
+                        "content": f"Evaluation completed. Action: {evaluation['action']}"
                     }
                 ],
                 "current_discussion": [
                     {
                         "role": "evaluator",
-                        "content": str(parsed_data["evaluation"])
+                        "content": str(evaluation)
                     }
                 ],
-                # Add action-specific flags for workflow control
-                "needs_replan": parsed_data["evaluation"]["action"] == "REPLAN",
-                "next_topic": parsed_data["evaluation"]["action"] == "NEXT_TOPIC",
-                "continue_sequence": parsed_data["evaluation"]["action"] == "CONTINUE"
+                # Add all control flags for workflow
+                "needs_replan": evaluation["action"] == "REPLAN",
+                "next_topic": evaluation["action"] == "NEXT_TOPIC",
+                "continue_sequence": evaluation["action"] == "CONTINUE",
+                "sequence_complete": evaluation["sequence_complete"],
+                "current_topic_complete": evaluation["current_topic_complete"]
             }
             
         except json.JSONDecodeError as e:

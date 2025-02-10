@@ -4,128 +4,70 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 from src.prompts.agent_prompts import EXECUTOR_PROMPT
 from src.config.settings import settings
+from .base_agent import BaseAgent
 import json
 
-class ExecutorAgent:
+class ExecutorAgent(BaseAgent):
     """Agent responsible for executing the case study discussion."""
     
     def __init__(self):
         self.llm = ChatOpenAI(
             model=settings.openai_model,
-            api_key=settings.openai_api_key,
-            temperature=0.7
+            temperature=0.7,
+            api_key=settings.openai_api_key
         )
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Generate the next part of the discussion."""
         
-        current_point = state.get("current_step", "")
-        personas = state.get("personas", {})
-        current_discussion = state.get("current_discussion", [])
         assignments = state.get("assignments", [])
+        if not assignments:
+            raise ValueError("No assignments found in state")
         
-        # Get the latest assignment
-        latest_assignment = assignments[-1] if assignments else None
-        assigned_persona = None
-        professor_question = None
+        latest_assignment = assignments[-1]
+        professor_statement = latest_assignment.get("professor_statement", "")
+        assigned_persona = latest_assignment.get("assigned_persona", "")
         
-        if latest_assignment:
-            try:
-                # Handle SystemMessage object
-                assignment_str = latest_assignment.content if hasattr(latest_assignment, 'content') else latest_assignment.get('content', '')
-                
-                # The content is already a dictionary, no need for json.loads
-                if isinstance(assignment_str, str):
-                    # Safely evaluate the string as a Python literal
-                    import ast
-                    assignment_content = ast.literal_eval(assignment_str)
-                else:
-                    assignment_content = assignment_str
-                
-                # Get the persona name and find it in the personas dictionary
-                persona_name = assignment_content["assigned_persona"]
-                assigned_persona = next((p for p in personas if p["name"] == persona_name), None)
-                
-                professor_question = assignment_content["professor_statement"]
-                
-            except (ValueError, KeyError, AttributeError, SyntaxError) as e:
-                print(f"Error parsing assignment: {e}")
-                return {
-                    "discussion": {
-                        "response": {
-                            "speaker": "System",
-                            "message": f"Error processing discussion assignment: {str(e)}",
-                            "key_points": []
-                        }
-                    }
-                }
+        if not professor_statement or not assigned_persona:
+            raise ValueError("Missing professor statement or assigned persona")
+            
+        personas = state.get("personas", {})
+        assigned_persona_data = personas.get(assigned_persona)
         
-        if not assigned_persona or not professor_question:
+        if not assigned_persona_data:
+            raise ValueError(f"Could not find data for assigned persona: {assigned_persona}")
+            
+        # Check if this is a human participant
+        if assigned_persona_data.get("is_human", False):
             return {
                 "discussion": {
                     "response": {
-                        "speaker": "System",
-                        "message": f"Missing required assignment information. Persona: {assigned_persona is not None}, Question: {professor_question is not None}",
+                        "message": "Awaiting human participant response...",
+                        "speaker": assigned_persona,
+                        "references_to_others": [],
+                        "questions_raised": [],
                         "key_points": []
                     }
-                }
+                },
+                "awaiting_user_input": True,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": f"Please provide your response as {assigned_persona_data['name']}:\n{professor_statement}"
+                    }
+                ]
             }
 
-        # Update system message to focus on persona embodiment and dynamic discussion
-        system_message = """You are an AI that embodies a specific persona in a Harvard Business School case discussion. 
-        You must think and respond exactly as this persona would, taking into account their background, expertise, traits, and perspective.
-        
-        When responding:
-        1. Address the professor's question directly while staying true to your persona
-        2. Consider and reference other participants' viewpoints when relevant
-        3. Support your arguments with specific examples or experiences
-        4. Challenge assumptions when appropriate
-        5. Demonstrate critical thinking and analytical depth
-        6. Be prepared to engage in constructive debate
-        7. Keep your response concise, casual, and to the point.
-        
-        You must respond with ONLY valid JSON in the following format:
-        {
-            "discussion": {
-                "response": {
-                    "speaker": "string",
-                    "message": "string",
-                    "key_points": ["string"],
-                    "references_to_others": ["string"],  // References to other participants' points
-                    "questions_raised": ["string"]       // Questions to stimulate further discussion
-                }
-            }
-        }
-        
-        Do not include any other text - only the JSON object."""
-        
-        # Create a context-rich prompt
-        prompt = f"""Embody this persona:
-        Name: {assigned_persona.get('name')}
-        Title: {assigned_persona.get('title')}
-        Background: {assigned_persona.get('background')}
-        Expertise: {', '.join(assigned_persona.get('expertise', []))}
-        Traits: {', '.join(assigned_persona.get('traits', []))}
-
-        Professor's Question: {professor_question}
-
-        Previous Discussion Context:
-        {self._format_discussion_history(current_discussion)}
-
-        Remember to:
-        - Build upon or respectfully challenge previous points
-        - Share relevant personal or professional experiences
-        - Raise thought-provoking questions
-        - Consider multiple perspectives
-        
-        Generate a response as this persona, addressing the professor's question."""
-        
+        # For AI participants, generate a response using the LLM
         response = await self.llm.ainvoke([
-            SystemMessage(content=system_message),
-            HumanMessage(content=prompt)
+            SystemMessage(content=self._get_system_prompt(assigned_persona_data)),
+            HumanMessage(content=self._create_prompt(
+                professor_statement=professor_statement,
+                current_discussion=state.get("current_discussion", []),
+                persona_data=assigned_persona_data
+            ))
         ])
         
-        # Parse JSON response with error handling
         try:
             cleaned_content = response.content.strip()
             if cleaned_content.startswith("```json"):
@@ -137,21 +79,48 @@ class ExecutorAgent:
             parsed_data = json.loads(cleaned_content)
             
             return {
-                "discussion": parsed_data["discussion"],
-                "messages": [
-                    {
-                        "role": "student",
-                        "content": parsed_data["discussion"]["response"]["message"],
-                        "speaker": parsed_data["discussion"]["response"]["speaker"],
-                        "references": parsed_data["discussion"]["response"].get("references_to_others", []),
-                        "questions": parsed_data["discussion"]["response"].get("questions_raised", [])
-                    }
-                ]
+                "discussion": parsed_data,
+                "awaiting_user_input": False
             }
             
         except json.JSONDecodeError as e:
             raise ValueError(f"Failed to parse LLM response as JSON: {e}")
-    
+
+    def _get_system_prompt(self, persona_data: Dict[str, Any]) -> str:
+        return f"""You are {persona_data['name']}, with the following characteristics:
+        Background: {persona_data['background']}
+        Expertise: {persona_data['expertise']}
+        Personality: {persona_data['personality']}
+        Role: {persona_data['role']}
+
+        Respond in character to the discussion prompt. Your response must be in JSON format:
+        {{
+            "response": {{
+                "message": "Your response text",
+                "speaker": "{persona_data['name']}",
+                "references_to_others": ["names of other participants you reference"],
+                "questions_raised": ["questions you pose to others"],
+                "key_points": ["main points you make"]
+            }}
+        }}
+
+        Guidelines:
+        - Stay in character
+        - Reference others' points when relevant
+        - Ask thoughtful questions
+        - Make clear, substantive points
+        - Be concise but thorough
+        
+        Do not include any other text, explanations, or formatting - only the JSON object."""
+
+    def _create_prompt(self, professor_statement: str, current_discussion: list, persona_data: Dict[str, Any]) -> str:
+        return f"""Professor's Question: {professor_statement}
+
+Current Discussion:
+{json.dumps(current_discussion, indent=2)}
+
+Respond as {persona_data['name']} to the professor's question, taking into account the current discussion context."""
+
     def _format_discussion_history(self, discussion: List[Dict[str, Any]]) -> str:
         """Format the discussion history for context."""
         formatted_history = []

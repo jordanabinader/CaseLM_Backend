@@ -15,7 +15,35 @@ class AssignmentAgent(BaseAgent):
         current_discussion = state["current_discussion"]
         topics = state["topics"]
         personas = state["personas"]
+        current_sequence = state.get("current_sequence")  # Get the current sequence if it exists
 
+        # Get the follow-up question from the current sequence if available
+        follow_up_question = None
+        if current_sequence and "follow_up_question" in current_sequence:
+            follow_up_question = current_sequence["follow_up_question"]
+        
+        if follow_up_question:
+            # If we have a follow-up question, use it directly
+            assigned_persona = current_sequence["persona_sequence"][0]
+            
+            # Check if the assigned persona is a human participant
+            is_human = personas.get(assigned_persona, {}).get("is_human", False)
+            
+            return {
+                "assignment": {
+                    "professor_statement": follow_up_question,
+                    "assigned_persona": assigned_persona
+                },
+                "messages": [
+                    {
+                        "role": "professor",
+                        "content": follow_up_question
+                    }
+                ],
+                "awaiting_user_input": is_human  # Set flag if human persona is assigned
+            }
+
+        # Otherwise, fall back to generating a new question
         response = await self.llm.ainvoke([
             SystemMessage(content=self._get_system_prompt()),
             HumanMessage(content=self._create_prompt(

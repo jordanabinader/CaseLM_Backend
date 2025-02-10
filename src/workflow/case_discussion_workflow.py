@@ -160,14 +160,19 @@ class CaseDiscussionWorkflow:
             "content": str(result["evaluation"]),
             "action": result["evaluation"].get("action", ""),
             "follow_up_question": result["evaluation"].get("follow_up_question", []),
-            "suggested_next_speaker": result["evaluation"].get("suggested_next_speaker", [])
+            "suggested_next_speaker": result["evaluation"].get("suggested_next_speaker", ""),
+            "sequence_complete": result["evaluation"].get("sequence_complete", False),
+            "current_topic_complete": result["evaluation"].get("current_topic_complete", False)
         }
         
+        # Return only the latest evaluation
         return {
-            "evaluations": [evaluation_message],
-            "needs_replan": result.get("needs_replan", False),
-            "next_topic": result.get("next_topic", False),
-            "continue_sequence": result.get("continue_sequence", True)
+            "evaluations": [evaluation_message],  # Override previous evaluations instead of appending
+            "needs_replan": result["evaluation"]["action"] == "REPLAN",
+            "next_topic": result["evaluation"]["action"] == "NEXT_TOPIC",
+            "continue_sequence": result["evaluation"]["action"] == "CONTINUE",
+            "sequence_complete": result["evaluation"].get("sequence_complete", False),
+            "current_topic_complete": result["evaluation"].get("current_topic_complete", False)
         }
 
     async def summarize_discussion(self, state: DiscussionState) -> Dict[str, Any]:
@@ -232,17 +237,29 @@ class CaseDiscussionWorkflow:
         }
 
     async def replan_sequence(self, state: DiscussionState) -> Dict[str, Any]:
-        # Get evaluations from the nested structure
-        evaluations = state["evaluations"]
-        print(f"Evaluations: {evaluations}")
+        # Get evaluations from the state
+        evaluations = state.get("evaluations", [])
+        if not evaluations:
+            raise ValueError("No evaluations found in state")
+        
         latest_evaluation = evaluations[-1]
-        print(f"Latest evaluation: {latest_evaluation}")
+        suggested_next_speaker = None
+        
+        # Handle AIMessage object
+        if hasattr(latest_evaluation, 'additional_kwargs'):
+            suggested_next_speaker = latest_evaluation.additional_kwargs.get("suggested_next_speaker")
+        else:
+            suggested_next_speaker = latest_evaluation.get("suggested_next_speaker")
+        
+        if not suggested_next_speaker:
+            raise ValueError("No suggested next speaker found in evaluation")
         
         result = await self.replan_agent.process({
             "discussion_plan": state["discussion_plan"],
             "personas": state["personas"],
             "current_discussion": state["current_discussion"],
-            "suggested_next_speaker": latest_evaluation.additional_kwargs["suggested_next_speaker"]
+            "evaluations": evaluations,  # Pass the full evaluations list
+            "suggested_next_speaker": suggested_next_speaker
         })
         
         # Return both the updated plan and the current sequence
@@ -266,8 +283,6 @@ class CaseDiscussionWorkflow:
         return "execute_discussion" if state.get("assignments") else END
 
     def evaluation_condition(self, state: DiscussionState) -> str:
-        
-        # Check if evaluation result is nested
         if "evaluate_discussion" in state:
             evaluations = state["evaluate_discussion"].get("evaluations", [])
         else:
@@ -278,11 +293,15 @@ class CaseDiscussionWorkflow:
             
         latest_evaluation = evaluations[-1]
         
-        # Get action from additional_kwargs for AIMessage
+        # Get action and completion status from additional_kwargs for AIMessage
         action = latest_evaluation.additional_kwargs.get("action", "")
+        sequence_complete = latest_evaluation.additional_kwargs.get("sequence_complete", False)
+        current_topic_complete = latest_evaluation.additional_kwargs.get("current_topic_complete", False)
         
-        if action == "NEXT_TOPIC":
+        if current_topic_complete:
             return "summarize_discussion"
+        elif sequence_complete:
+            return "replan_sequence"
         elif action == "REPLAN":
             return "replan_sequence"
         else:
