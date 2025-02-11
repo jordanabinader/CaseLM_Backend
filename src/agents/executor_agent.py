@@ -4,13 +4,15 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 from src.prompts.agent_prompts import EXECUTOR_PROMPT
 from src.config.settings import settings
-from .base_agent import BaseAgent
+from src.agents.base_agent import BaseAgent
 import json
+from src.models.discussion_models import ExecutorResponse, PersonaInfo, Assignment
 
 class ExecutorAgent(BaseAgent):
     """Agent responsible for executing the case study discussion."""
     
     def __init__(self):
+        super().__init__()  # Call parent class's __init__
         self.llm = ChatOpenAI(
             model=settings.openai_model,
             temperature=0.7,
@@ -26,20 +28,21 @@ class ExecutorAgent(BaseAgent):
         
         latest_assignment = assignments[-1]
         
-        # Handle both dict and SystemMessage objects
-        if hasattr(latest_assignment, 'content'):
+        # Handle both Pydantic model and dict/SystemMessage
+        if isinstance(latest_assignment, Assignment):
+            professor_statement = latest_assignment.professor_statement
+            assigned_persona = latest_assignment.assigned_persona
+        elif hasattr(latest_assignment, 'content'):
             # It's a SystemMessage, parse its content
             try:
-                # Remove single quotes and replace with double quotes for valid JSON
                 content_str = latest_assignment.content.replace("'", '"')
                 assignment_data = json.loads(content_str)
                 professor_statement = assignment_data.get("professor_statement", "")
                 assigned_persona = assignment_data.get("assigned_persona", "")
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError:
                 # If JSON parsing fails, try to extract directly from the string
                 content = latest_assignment.content
                 if "professor_statement" in content and "assigned_persona" in content:
-                    # Parse the string manually
                     import ast
                     assignment_data = ast.literal_eval(content)
                     professor_statement = assignment_data.get("professor_statement", "")
@@ -47,7 +50,6 @@ class ExecutorAgent(BaseAgent):
                 else:
                     raise ValueError(f"Could not parse assignment content: {content}")
         else:
-            # It's a dictionary
             professor_statement = latest_assignment.get("professor_statement", "")
             assigned_persona = latest_assignment.get("assigned_persona", "")
         
@@ -60,8 +62,22 @@ class ExecutorAgent(BaseAgent):
         if not assigned_persona_data:
             raise ValueError(f"Could not find data for assigned persona: {assigned_persona}")
             
+        # Handle both Pydantic model and dict
+        is_human = (
+            assigned_persona_data.is_human 
+            if isinstance(assigned_persona_data, PersonaInfo) 
+            else assigned_persona_data.get("is_human", False)
+        )
+        
+        # Get name safely
+        persona_name = (
+            assigned_persona_data.name 
+            if isinstance(assigned_persona_data, PersonaInfo) 
+            else assigned_persona_data.get("name", assigned_persona)
+        )
+            
         # Check if this is a human participant
-        if assigned_persona_data.get("is_human", False):
+        if is_human:
             return {
                 "discussion": {
                     "response": {
@@ -76,14 +92,41 @@ class ExecutorAgent(BaseAgent):
                 "messages": [
                     {
                         "role": "system",
-                        "content": f"Please provide your response as {assigned_persona_data['name']}:\n{professor_statement}"
+                        "content": f"Please provide your response as {persona_name}:\n{professor_statement}"
                     }
                 ]
             }
 
-        # For AI participants, generate a response using the LLM
+        # Get persona data safely
+        background = (
+            assigned_persona_data.background 
+            if isinstance(assigned_persona_data, PersonaInfo) 
+            else assigned_persona_data.get("background", "")
+        )
+        expertise = (
+            assigned_persona_data.expertise 
+            if isinstance(assigned_persona_data, PersonaInfo) 
+            else assigned_persona_data.get("expertise", "")
+        )
+        personality = (
+            assigned_persona_data.personality 
+            if isinstance(assigned_persona_data, PersonaInfo) 
+            else assigned_persona_data.get("personality", "")
+        )
+        role = (
+            assigned_persona_data.role 
+            if isinstance(assigned_persona_data, PersonaInfo) 
+            else assigned_persona_data.get("role", "")
+        )
+
         response = await self.llm.ainvoke([
-            SystemMessage(content=self._get_system_prompt(assigned_persona_data)),
+            SystemMessage(content=self._get_system_prompt({
+                "name": persona_name,
+                "background": background,
+                "expertise": expertise,
+                "personality": personality,
+                "role": role
+            })),
             HumanMessage(content=self._create_prompt(
                 professor_statement=professor_statement,
                 current_discussion=state.get("current_discussion", []),
@@ -92,22 +135,13 @@ class ExecutorAgent(BaseAgent):
         ])
         
         try:
-            cleaned_content = response.content.strip()
-            if cleaned_content.startswith("```json"):
-                cleaned_content = cleaned_content.split("```json")[1]
-            if cleaned_content.endswith("```"):
-                cleaned_content = cleaned_content.rsplit("```", 1)[0]
-            cleaned_content = cleaned_content.strip()
-            
-            parsed_data = json.loads(cleaned_content)
-            
+            parsed_data = self._clean_and_parse_response(response.content, ExecutorResponse)
             return {
-                "discussion": parsed_data,
+                "discussion": parsed_data.model_dump(),
                 "awaiting_user_input": False
             }
-            
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse LLM response as JSON: {e}")
+        except Exception as e:
+            raise ValueError(f"Failed to parse LLM response: {e}")
 
     def _get_system_prompt(self, persona_data: Dict[str, Any]) -> str:
         return f"""You are {persona_data['name']}, with the following characteristics:
@@ -128,6 +162,7 @@ class ExecutorAgent(BaseAgent):
         }}
 
         Guidelines:
+        - MOST IMPORTANT: Make your response extremely human like and casual.
         - Stay in character
         - Reference others' points when relevant
         - Ask thoughtful questions

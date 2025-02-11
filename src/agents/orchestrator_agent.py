@@ -4,11 +4,14 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 from src.prompts.agent_prompts import ORCHESTRATOR_PROMPT
 from src.config.settings import settings
+from src.models.discussion_models import OrchestratorResponse, DiscussionState
+from src.agents.base_agent import BaseAgent
 
-class OrchestratorAgent:
+class OrchestratorAgent(BaseAgent):
     """Agent responsible for orchestrating the case study discussion."""
     
     def __init__(self):
+        super().__init__()  # Call parent class's __init__
         self.llm = ChatOpenAI(
             model=settings.openai_model,
             api_key=settings.openai_api_key,
@@ -21,50 +24,65 @@ class OrchestratorAgent:
         # Format state for prompt
         state_summary = self._format_state(state)
         
-        # Get orchestrator's decision
         response = await self.llm.ainvoke([
-            SystemMessage(content=ORCHESTRATOR_PROMPT.format(state=state_summary)),
-            HumanMessage(content="What should be the next step in this discussion?")
+            SystemMessage(content="""You are the orchestrator of a case study discussion.
+            Your role is to determine the next logical step in the discussion process.
+            
+            You must respond with ONLY valid JSON in the following format:
+            {
+                "next_step": {
+                    "step": "string - one of: plan, execute, complete",
+                    "reasoning": "string explaining the decision"
+                }
+            }
+            
+            Do not include any other text, explanations, or formatting - only the JSON object."""),
+            HumanMessage(content=f"Based on the current state, what should be the next step?\n\n{state_summary}")
         ])
         
-        # Parse the response
-        next_step = self._parse_next_step(response.content)
-        
-        return {
-            "next_step": next_step["step"],
-            "messages": [
-                {
-                    "role": "orchestrator",
-                    "content": f"Moving to step: {next_step['step']}. {next_step['reasoning']}"
-                }
-            ]
-        }
+        try:
+            parsed_data = self._clean_and_parse_response(response.content, OrchestratorResponse)
+            
+            return {
+                "next_step": parsed_data.next_step.step,
+                "messages": [
+                    {
+                        "role": "orchestrator",
+                        "content": f"Moving to step: {parsed_data.next_step.step}. {parsed_data.next_step.reasoning}"
+                    }
+                ]
+            }
+            
+        except Exception as e:
+            raise ValueError(f"Failed to parse LLM response: {e}")
     
     def _format_state(self, state: Dict[str, Any]) -> str:
-        """Format the state for the prompt."""
+        """Format the state for the prompt, handling both dict and Pydantic models."""
+        discussion_plan = state.get('discussion_plan', {})
+        plan_length = (
+            len(discussion_plan.sequences) 
+            if hasattr(discussion_plan, 'sequences') 
+            else len(discussion_plan)
+        )
+        
+        messages = state.get('messages', [])
+        messages_length = (
+            len(messages) 
+            if isinstance(messages, list) 
+            else len(messages.dict() if hasattr(messages, 'dict') else [])
+        )
+        
+        insights = state.get('insights', [])
+        insights_length = (
+            len(insights) 
+            if isinstance(insights, list) 
+            else len(insights.dict() if hasattr(insights, 'dict') else [])
+        )
+        
         return f"""
 Current Step: {state.get('current_step', 'Not started')}
-Discussion Plan: {len(state.get('discussion_plan', {}))} points planned
-Messages: {len(state.get('messages', []))} messages exchanged
-Insights: {len(state.get('insights', []))} insights gathered
+Discussion Plan: {plan_length} points planned
+Messages: {messages_length} messages exchanged
+Insights: {insights_length} insights gathered
 Complete: {state.get('complete', False)}
 """
-    
-    def _parse_next_step(self, response: str) -> Dict[str, str]:
-        """Parse the LLM response to determine next step."""
-        # For now, simple parsing - could be made more robust
-        if "plan" in response.lower():
-            return {
-                "step": "plan",
-                "reasoning": "Need to create or update the discussion plan."
-            }
-        elif "execute" in response.lower():
-            return {
-                "step": "execute",
-                "reasoning": "Ready to execute next discussion point."
-            }
-        else:
-            return {
-                "step": "complete",
-                "reasoning": "Discussion objectives have been met."
-            }

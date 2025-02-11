@@ -1,12 +1,14 @@
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
-from .base_agent import BaseAgent
+from src.agents.base_agent import BaseAgent
 from src.config.settings import settings
+from src.models.discussion_models import PersonaResponse, PersonaInfo
 import json
 
 class PersonaCreatorAgent(BaseAgent):
     def __init__(self):
+        super().__init__()
         self.llm = ChatOpenAI(
             model=settings.openai_model,
             temperature=0.7,
@@ -49,37 +51,37 @@ class PersonaCreatorAgent(BaseAgent):
         if not human_participant:
             raise ValueError("No human participant provided")
 
+        # Convert human participant to PersonaInfo if it's a dict
+        human_persona = (
+            human_participant 
+            if isinstance(human_participant, PersonaInfo)
+            else PersonaInfo(**human_participant)
+        )
+
         response = await self.llm.ainvoke([
             SystemMessage(content=self._get_system_prompt()),
             HumanMessage(content=f"""Create AI personas for this case, starting with participant_2 
             (participant_1 is reserved for the human participant): {case_content}
             
             Human participant info (for context):
-            Name: {human_participant['name']}
-            Role: {human_participant['role']}
+            Name: {human_persona.name}
+            Role: {human_persona.role}
             """)
         ])
 
         try:
-            cleaned_content = response.content.strip()
-            if cleaned_content.startswith("```json"):
-                cleaned_content = cleaned_content.split("```json")[1]
-            if cleaned_content.endswith("```"):
-                cleaned_content = cleaned_content.rsplit("```", 1)[0]
-            cleaned_content = cleaned_content.strip()
-            
-            parsed_data = json.loads(cleaned_content)
+            parsed_data = self._clean_and_parse_response(response.content, PersonaResponse)
             
             # Validate that no AI persona uses participant_1
-            if "participant_1" in parsed_data["personas"]:
+            if "participant_1" in parsed_data.personas:
                 raise ValueError("AI personas cannot use participant_1 ID")
             
             # Create final personas dict with human participant as participant_1
             all_personas = {
-                "participant_1": human_participant
+                "participant_1": human_persona.model_dump()
             }
             # Add AI personas
-            all_personas.update(parsed_data["personas"])
+            all_personas.update({k: v.model_dump() for k, v in parsed_data.personas.items()})
             
             return {
                 "personas": all_personas,
@@ -90,5 +92,5 @@ class PersonaCreatorAgent(BaseAgent):
                     }
                 ]
             }
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse LLM response as JSON: {e}")
+        except Exception as e:
+            raise ValueError(f"Failed to parse LLM response: {e}")

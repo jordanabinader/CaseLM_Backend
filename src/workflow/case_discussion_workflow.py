@@ -353,6 +353,57 @@ class CaseDiscussionWorkflow:
     def user_input_complete_condition(self, state: DiscussionState) -> str:
         return "execute_discussion" if not state.get("awaiting_user_input") else "evaluate_discussion"
 
+    def print_state(self, state: Dict[str, Any]) -> None:
+        """Print state in a clear, readable format based on state type."""
+        if isinstance(state, list):
+            print("\nState is a list containing:")
+            for item in state:
+                if isinstance(item, dict):
+                    print(f"\n- Keys present: {list(item.keys())}")
+                    if 'role' in item and 'content' in item:
+                        print(f"[{item['role']}]: {item['content']}")
+            return
+        # Handle different state types
+        if 'create_personas' in state:
+            print("\n Creating Personas:")
+            print(state['create_personas']['personas'])
+            
+        if 'create_topics' in state:
+            print("\ Creating Topics:")
+            print(state['create_topics']['topics'])
+            
+        if 'create_plan' in state:
+            print("Creating Plan:")
+            print(state['create_plan']['discussion_plan'])
+            
+        if 'assign_discussion' in state:
+            print("Current Assignment:")
+            print(state['assign_discussion']['assignments'][0]['content'])
+        
+        if 'execute_discussion' in state:
+            print(state)
+            if 'awaiting_user_input' in state['execute_discussion']:
+                print("Awaiting User Input:")
+            else:
+                print("Executing Answer:")
+                print(state['execute_discussion']['current_discussion'][0]['speaker'])
+                print(state['execute_discussion']['current_discussion'][0]['content'])
+
+        if 'handle_user_input' in state:
+            print("\ Handling Human Answer:")
+            print(state['handle_user_input'])
+            
+        if 'evaluate_discussion' in state:
+            print("\ Evaluating Answer:")
+            print(state['evaluate_discussion']['evaluations'][0]['action'])
+            print(state['evaluate_discussion']['evaluations'][0]['follow_up_question'])
+        
+        if 'replan_sequence' in state:
+            print("\ REPLANNING:")
+            print(state['replan_sequence']['discussion_plan'])
+            
+        print("\n" + "="*80 + "\n")
+
     async def run(self, case_content: str, *, human_participant: Dict[str, Any]):
         # Initialize state with all required fields
         self.current_state = {
@@ -377,9 +428,8 @@ class CaseDiscussionWorkflow:
             
         try:
             async for state in self.graph.astream(self.current_state):
-                print(state)
+                self.print_state(state)  # Use the new print function
                 if state.get("messages"):
-                    print("HERE")
                     for message in state["messages"]:
                         # Handle both direct dictionary and AIMessage formats
                         content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)

@@ -3,6 +3,7 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 from src.config.settings import settings
 from .base_agent import BaseAgent
+from src.models.discussion_models import EvaluationResponse
 
 
 class EvaluatorAgent(BaseAgent):
@@ -46,7 +47,7 @@ class EvaluatorAgent(BaseAgent):
                     "action": "CONTINUE|REPLAN|NEXT_TOPIC",
                     "reasoning": "string explaining why this action drives deeper thinking",
                     "suggested_next_speaker": "string (required for REPLAN)",
-                    "follow_up_question": ["string (required) - must be challenging, direct, and thought-provoking based on the current discussion"],
+                    "follow_up_question": ["string (ALWAYS REQUIRED) - must be challenging, direct, and thought-provoking based on the current discussion"],
                     "sequence_complete": boolean,
                     "current_topic_complete": boolean
                 }
@@ -64,8 +65,7 @@ class EvaluatorAgent(BaseAgent):
             HumanMessage(content=str(state))
         ])
         
-        # Parse JSON response with error handling
-        import json
+        # Parse response using Pydantic model
         try:
             # Strip any potential whitespace or markdown formatting
             cleaned_content = response.content.strip()
@@ -75,38 +75,35 @@ class EvaluatorAgent(BaseAgent):
                 cleaned_content = cleaned_content.rsplit("```", 1)[0]
             cleaned_content = cleaned_content.strip()
             
-            parsed_data = json.loads(cleaned_content)
-            evaluation = parsed_data["evaluation"]
-            
-            # Ensure required boolean flags are present
-            evaluation["sequence_complete"] = evaluation.get("sequence_complete", False)
-            evaluation["current_topic_complete"] = evaluation.get("current_topic_complete", False)
+            # Use Pydantic model to parse and validate response
+            parsed_data = EvaluationResponse.model_validate_json(cleaned_content)
+            evaluation = parsed_data.evaluation
             
             # Force current_topic_complete to True if action is NEXT_TOPIC
-            if evaluation["action"] == "NEXT_TOPIC":
-                evaluation["current_topic_complete"] = True
+            if evaluation.action == "NEXT_TOPIC":
+                evaluation.current_topic_complete = True
             
             return {
-                "evaluation": evaluation,
+                "evaluation": evaluation.model_dump(),
                 "messages": [
                     {
                         "role": "evaluator",
-                        "content": f"Evaluation completed. Action: {evaluation['action']}"
+                        "content": f"Evaluation completed. Action: {evaluation.action}"
                     }
                 ],
                 "current_discussion": [
                     {
                         "role": "evaluator",
-                        "content": str(evaluation)
+                        "content": str(evaluation.model_dump())
                     }
                 ],
                 # Add all control flags for workflow
-                "needs_replan": evaluation["action"] == "REPLAN",
-                "next_topic": evaluation["action"] == "NEXT_TOPIC",
-                "continue_sequence": evaluation["action"] == "CONTINUE",
-                "sequence_complete": evaluation["sequence_complete"],
-                "current_topic_complete": evaluation["current_topic_complete"]
+                "needs_replan": evaluation.action == "REPLAN",
+                "next_topic": evaluation.action == "NEXT_TOPIC",
+                "continue_sequence": evaluation.action == "CONTINUE",
+                "sequence_complete": evaluation.sequence_complete,
+                "current_topic_complete": evaluation.current_topic_complete
             }
             
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse LLM response as JSON: {e}")
+        except Exception as e:
+            raise ValueError(f"Failed to parse LLM response: {e}")

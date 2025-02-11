@@ -3,11 +3,14 @@ from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 from src.config.settings import settings
+from src.models.discussion_models import TopicResponse
+from src.agents.base_agent import BaseAgent
 
-class TopicAgent:
+class TopicAgent(BaseAgent):
     """Agent responsible for topic selection for the case study discussion."""
     
     def __init__(self):
+        super().__init__()  # Call parent class's __init__
         self.llm = ChatOpenAI(
             model=settings.openai_model,
             api_key=settings.openai_api_key,
@@ -16,8 +19,10 @@ class TopicAgent:
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Create or update the discussion plan."""
-        #TODO: Use pydantic to validate the response
-        # Get planner's output
+        case_content = state.get("case_content", "")
+        if not case_content:
+            raise ValueError("No case content provided")
+
         response = await self.llm.ainvoke([
             SystemMessage(content="""You are the Topic Planner, responsible for identifying the 3 most critical topics or core insights for this Harvard Business School case study discussion.
             Your role is to create a focused roadmap covering the 3 most important aspects that will lead to meaningful learning outcomes.
@@ -43,31 +48,30 @@ class TopicAgent:
             
             Ensure you provide exactly 3 topics in the response.
             Do not include any other text, explanations, or formatting - only the JSON object."""),
-            HumanMessage(content=f"Develop a focused three-topic discussion plan. Include cold-call opportunities, debate questions, and key moments for insight evaluation. Create a discussion plan for this case: {state['case_content']}")
+            HumanMessage(content=f"Develop a focused three-topic discussion plan. Include cold-call opportunities, debate questions, and key moments for insight evaluation. Create a discussion plan for this case: {case_content}")
         ])
         
-        # Parse JSON response with error handling
-        import json
         try:
-            # Strip any potential whitespace or markdown formatting
-            cleaned_content = response.content.strip()
-            if cleaned_content.startswith("```json"):
-                cleaned_content = cleaned_content.split("```json")[1]
-            if cleaned_content.endswith("```"):
-                cleaned_content = cleaned_content.rsplit("```", 1)[0]
-            cleaned_content = cleaned_content.strip()
+            parsed_data = self._clean_and_parse_response(response.content, TopicResponse)
             
-            parsed_data = json.loads(cleaned_content)
+            # Validate we have exactly 3 topics
+            if len(parsed_data.plan.topics) != 3:
+                raise ValueError(f"Expected exactly 3 topics, got {len(parsed_data.plan.topics)}")
+            
+            # Validate sequence contains indices 0, 1, 2
+            expected_sequence = set([0, 1, 2])
+            if set(parsed_data.plan.sequence) != expected_sequence:
+                raise ValueError("Topic sequence must contain exactly indices 0, 1, 2")
             
             return {
-                "plan": parsed_data["plan"],
+                "plan": parsed_data.plan.model_dump(),
                 "messages": [
                     {
                         "role": "planner",
-                        "content": f"Discussion plan created with {len(parsed_data['plan']['topics'])} topics."
+                        "content": f"Discussion plan created with {len(parsed_data.plan.topics)} topics."
                     }
                 ]
             }
             
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse LLM response as JSON: {e}")
+        except Exception as e:
+            raise ValueError(f"Failed to parse LLM response: {e}")
