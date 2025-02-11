@@ -10,7 +10,7 @@ class EvaluatorAgent(BaseAgent):
         self.llm = ChatOpenAI(
             model=settings.openai_model,
             api_key=settings.openai_api_key,
-            temperature=0.7
+            temperature=0.5
         )
 
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -46,19 +46,19 @@ class EvaluatorAgent(BaseAgent):
                     "action": "CONTINUE|REPLAN|NEXT_TOPIC",
                     "reasoning": "string explaining why this action drives deeper thinking",
                     "suggested_next_speaker": "string (required for REPLAN)",
-                    "follow_up_question": ["string - must be challenging and thought-provoking"],
+                    "follow_up_question": ["string (required) - must be challenging, direct, and thought-provoking based on the current discussion"],
                     "sequence_complete": boolean,
                     "current_topic_complete": boolean
                 }
             }
 
             Important criteria:
-            - Questions should never be simple or superficial
             - Always push for deeper analysis and critical thinking
-            - Challenge students to defend and justify their positions
+            - MOST IMPORTANT: Challenge students to defend and justify their positions
+            - Ask to clarify their position and ALWAYS ask follow up questions, especially if the participant is the human
             - Create intellectual tension to drive learning
             - Set sequence_complete when current speakers have contributed
-            - Set current_topic_complete only when thoroughly examined from all angles
+            - Set current_topic_complete when you feel like it
             
             Do not include any other text, explanations, or formatting - only the JSON object."""),
             HumanMessage(content=str(state))

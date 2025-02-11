@@ -18,6 +18,7 @@ class DiscussionState(TypedDict):
     complete: bool
     awaiting_user_input: bool
     user_response: str
+    human_participant: Dict[str, Any]
 
 class CaseDiscussionWorkflow:
     def __init__(self):
@@ -67,8 +68,15 @@ class CaseDiscussionWorkflow:
         self.workflow.add_conditional_edges("create_topics", self.topic_creation_condition, {"create_plan": "create_plan", END: END})
         self.workflow.add_conditional_edges("create_plan", self.planning_condition, {"assign_discussion": "assign_discussion", END: END})
         self.workflow.add_conditional_edges("assign_discussion", self.assignment_condition, {"execute_discussion": "execute_discussion", END: END})
-        self.workflow.add_edge("execute_discussion", "evaluate_discussion")
-        
+        self.workflow.add_edge("handle_user_input", "evaluate_discussion")
+        self.workflow.add_conditional_edges(
+            "execute_discussion",
+            self.user_input_condition,
+            {
+                "handle_user_input": "handle_user_input",
+                "evaluate_discussion": "evaluate_discussion"
+            }
+        )
         self.workflow.add_conditional_edges(
             "evaluate_discussion",
             self.evaluation_condition,
@@ -82,25 +90,11 @@ class CaseDiscussionWorkflow:
         self.workflow.add_edge("summarize_discussion", "assign_discussion")
         self.workflow.add_edge("replan_sequence", "assign_discussion")
 
-        self.workflow.add_conditional_edges(
-            "execute_discussion",
-            self.user_input_condition,
-            {
-                "handle_user_input": "handle_user_input",
-                "evaluate_discussion": "evaluate_discussion"
-            }
-        )
-        self.workflow.add_conditional_edges(
-            "handle_user_input",
-            self.user_input_complete_condition,
-            {
-                "execute_discussion": "execute_discussion",
-                "evaluate_discussion": "evaluate_discussion"
-            }
-        )
-
     async def create_personas(self, state: DiscussionState) -> Dict[str, Any]:
-        result = await self.persona_creator.process({"case_content": state["case_content"]})
+        result = await self.persona_creator.process({
+            "case_content": state["case_content"],
+            "human_participant": state["human_participant"]
+        })
         return {
             "personas": result["personas"],
             "current_step": "create_personas"
@@ -133,6 +127,15 @@ class CaseDiscussionWorkflow:
             "assignments": state["assignments"]
         })
         
+        # Check if we're waiting for user input
+        if result.get("awaiting_user_input"):
+            return {
+                "awaiting_user_input": True,
+                "current_step": "execute_discussion",
+                "messages": result.get("messages", []),  # Propagate the messages
+                "current_discussion": state["current_discussion"]  # Preserve existing discussion
+            }
+        
         formatted_message = {
             "role": "assistant",
             "content": str(result["discussion"]["response"]["message"]),
@@ -144,7 +147,8 @@ class CaseDiscussionWorkflow:
         
         return {
             "current_discussion": [formatted_message],
-            "current_step": "execute_discussion"
+            "current_step": "execute_discussion",
+            "awaiting_user_input": False
         }
 
     async def evaluate_discussion(self, state: DiscussionState) -> Dict[str, Any]:
@@ -201,17 +205,53 @@ class CaseDiscussionWorkflow:
 
     async def handle_user_input(self, state: DiscussionState) -> Dict[str, Any]:
         if not state["user_response"]:
-            return {"awaiting_user_input": True}
-        
-        user_message = {
-            "role": "user",
-            "content": state["user_response"]
-        }
+            # Get the latest message prompt
+            latest_message = state.get("messages", [])[-1] if state.get("messages") else None
+            if latest_message:
+                print("\n" + "="*50)
+                print("Your turn to respond:")
+                print(latest_message["content"])
+                print("="*50 + "\n")
+            
+            # Collect user input
+            print("Enter your response (press Enter twice to finish):")
+            lines = []
+            while True:
+                line = input()
+                if line == "":
+                    break
+                lines.append(line)
+            
+            user_response = "\n".join(lines)
+            
+            # Get the current human participant info
+            human_participant = state["human_participant"]
+            
+            user_message = {
+                "role": "user",
+                "content": user_response,
+                "speaker": "participant_1",  # Human is always participant_1
+                "name": human_participant["name"],
+                "references_to_others": [],  # Could be parsed from the response
+                "questions_raised": [],      # Could be parsed from the response
+                "key_points": []            # Could be parsed from the response
+            }
+            
+            return {
+                "user_inputs": [user_message],
+                "current_discussion": [user_message],  # Add to discussion history
+                "awaiting_user_input": False,
+                "user_response": ""
+            }
         
         return {
-            "user_inputs": [user_message],
-            "awaiting_user_input": False,
-            "user_response": ""
+            "awaiting_user_input": True,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Waiting for your response..."
+                }
+            ]
         }
 
     async def assign_discussion(self, state: DiscussionState) -> Dict[str, Any]:
@@ -311,13 +351,14 @@ class CaseDiscussionWorkflow:
         return "handle_user_input" if state.get("awaiting_user_input") else "evaluate_discussion"
 
     def user_input_complete_condition(self, state: DiscussionState) -> str:
-        return "execute_discussion" if state.get("awaiting_user_input") else "evaluate_discussion"
+        return "execute_discussion" if not state.get("awaiting_user_input") else "evaluate_discussion"
 
-    async def run(self, case_content: str):
+    async def run(self, case_content: str, *, human_participant: Dict[str, Any]):
         # Initialize state with all required fields
-        initial_state = {
+        self.current_state = {
             "case_content": case_content,
-            "current_step": "create_personas",  # Set initial step
+            "human_participant": human_participant,
+            "current_step": "create_personas",
             "personas": {},
             "discussion_plan": {},
             "topics": {},
@@ -335,8 +376,36 @@ class CaseDiscussionWorkflow:
             self.graph = self.workflow.compile()
             
         try:
-            async for state in self.graph.astream(initial_state):
-                print(f"State update: {state}")
+            async for state in self.graph.astream(self.current_state):
+                print(state)
+                if state.get("messages"):
+                    print("HERE")
+                    for message in state["messages"]:
+                        # Handle both direct dictionary and AIMessage formats
+                        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+                        speaker = None
+                        
+                        if isinstance(message, dict):
+                            speaker = message.get("speaker", "System")
+                        else:
+                            # Handle AIMessage format
+                            speaker = message.additional_kwargs.get("speaker", "System") if hasattr(message, "additional_kwargs") else "System"
+                        
+                        if content:
+                            print(f"\n{speaker}: {content}")
+                
+                self.current_state = state  # Update the stored state
+                
+                # If we're awaiting user input, pause here and return the state
+                if state.get("awaiting_user_input"):
+                    # Get the latest assignment message
+                    latest_message = state.get("messages", [])[-1] if state.get("messages") else None
+                    if latest_message:
+                        print("\n" + "="*50)
+                        print("Awaiting user input:")
+                        print(latest_message["content"])
+                        print("="*50 + "\n")
+                    return state
                 
                 if state.get("complete"):
                     final_result = {
@@ -348,6 +417,7 @@ class CaseDiscussionWorkflow:
                     }
                     print("Workflow complete! Final result:", final_result)
                     return final_result
+                
         except Exception as e:
             print(f"Error in workflow: {str(e)}")
             raise
@@ -373,7 +443,6 @@ class CaseDiscussionWorkflow:
         graph.add_conditional_edges("create_topics", self.topic_creation_condition, {"create_plan": "create_plan", END: END})
         graph.add_conditional_edges("create_plan", self.planning_condition, {"assign_discussion": "assign_discussion", END: END})
         graph.add_conditional_edges("assign_discussion", self.planning_condition, {"execute_discussion": "execute_discussion", END: END})
-        graph.add_edge("execute_discussion", "evaluate_discussion")
         graph.add_conditional_edges(
             "evaluate_discussion",
             self.evaluation_condition,

@@ -31,12 +31,39 @@ Questions for Discussion:
 4. How can they maximize early adoption?
 """
 
+# Define the human participant
+HUMAN_PARTICIPANT = {
+    "name": "Jordan",  # or any name you prefer
+    "background": "Research Scientist at DeepMind with experience in AI/ML products",
+    "expertise": "Research in AI/ML products",
+    "personality": "Technical and Strategic thinker with customer focus",
+    "is_human": True,
+    "role": "Research Scientist"
+}
+
 async def run_discussion():
-    # Initialize the graph
+    # Initialize the workflow
     discussion = CaseDiscussionWorkflow()
     
-    result = await discussion.run(TEST_CASE)
-        
+    # Start the discussion
+    state = await discussion.run(
+        case_content=TEST_CASE,
+        human_participant=HUMAN_PARTICIPANT
+    )
+    
+    # Continue the discussion until complete
+    while True:
+        if state.get("complete"):
+            print("Discussion complete!")
+            break
+            
+        if state.get("awaiting_user_input"):
+            # Get user input
+            user_response = input("Your response: ")
+            # Continue the discussion with the user's response
+            state = await discussion.provide_user_response(user_response)
+        else:
+            break
 
 if __name__ == "__main__":
     asyncio.run(run_discussion())

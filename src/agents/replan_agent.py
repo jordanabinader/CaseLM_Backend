@@ -18,7 +18,26 @@ class ReplanAgent(BaseAgent):
         if not suggested_next_speaker:
             raise ValueError("No suggested next speaker provided for replanning")
 
-        # Get the follow-up question from the latest evaluation with better error handling
+        # Get the personas to map name to participant_id
+        personas = state.get("personas", {})
+        if not personas:
+            raise ValueError("No personas found in state")
+
+        # If suggested_next_speaker is already a participant_id, use it directly
+        if suggested_next_speaker.startswith("participant_"):
+            participant_id = suggested_next_speaker
+        else:
+            # Find the participant_id for the suggested speaker name
+            participant_id = None
+            for pid, persona in personas.items():
+                if persona.get("name") == suggested_next_speaker:
+                    participant_id = pid
+                    break
+        
+            if not participant_id:
+                raise ValueError(f"Could not find participant_id for speaker: {suggested_next_speaker}")
+
+        # Get the follow-up question from the latest evaluation
         evaluations = state.get("evaluations", [])
         if not evaluations:
             raise ValueError("No evaluations found in state for replanning")
@@ -36,6 +55,9 @@ class ReplanAgent(BaseAgent):
             follow_up_question = follow_up_questions[0]
         else:
             raise ValueError("No follow-up question found in latest evaluation")
+
+        # Get the persona's name for the prompt
+        speaker_name = personas[participant_id]["name"]
 
         response = await self.llm.ainvoke([
             SystemMessage(content="""You are the Replanner, responsible for redirecting the discussion sequence.
@@ -58,12 +80,12 @@ class ReplanAgent(BaseAgent):
                 }
             }
             
-            The persona_sequence MUST start with the suggested next speaker.
+            The persona_sequence MUST start with the provided participant_id.
             Use the exact follow-up question provided - do not modify it.
             Do not include any other text, explanations, or formatting - only the JSON object."""),
             HumanMessage(content=f"""Replan the discussion sequence with the following context:
                 Current plan: {state['discussion_plan']}
-                Suggested next speaker: {suggested_next_speaker}
+                Required first speaker (participant_id): {participant_id} (Name: {speaker_name})
                 Follow-up question: {follow_up_question}
                 Current discussion: {state.get('current_discussion', [])}""")
         ])
@@ -83,8 +105,8 @@ class ReplanAgent(BaseAgent):
             
             # Verify the suggested speaker is actually next in the sequence
             first_sequence = parsed_data["updated_plan"]["sequences"][0]
-            if first_sequence["persona_sequence"][0] != suggested_next_speaker:
-                raise ValueError(f"Replan failed: Next speaker should be {suggested_next_speaker}, but got {first_sequence['persona_sequence'][0]}")
+            if first_sequence["persona_sequence"][0] != participant_id:
+                raise ValueError(f"Replan failed: Next speaker should be {participant_id}, but got {first_sequence['persona_sequence'][0]}")
             
             # Force the follow-up question to be the one from the evaluator
             first_sequence["follow_up_question"] = follow_up_question
@@ -94,7 +116,7 @@ class ReplanAgent(BaseAgent):
                 "messages": [
                     {
                         "role": "replanner",
-                        "content": f"Discussion sequence replanned. Next speaker: {suggested_next_speaker}"
+                        "content": f"Discussion sequence replanned. Next speaker: {speaker_name}"
                     }
                 ]
             }

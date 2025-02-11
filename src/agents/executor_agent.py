@@ -25,8 +25,31 @@ class ExecutorAgent(BaseAgent):
             raise ValueError("No assignments found in state")
         
         latest_assignment = assignments[-1]
-        professor_statement = latest_assignment.get("professor_statement", "")
-        assigned_persona = latest_assignment.get("assigned_persona", "")
+        
+        # Handle both dict and SystemMessage objects
+        if hasattr(latest_assignment, 'content'):
+            # It's a SystemMessage, parse its content
+            try:
+                # Remove single quotes and replace with double quotes for valid JSON
+                content_str = latest_assignment.content.replace("'", '"')
+                assignment_data = json.loads(content_str)
+                professor_statement = assignment_data.get("professor_statement", "")
+                assigned_persona = assignment_data.get("assigned_persona", "")
+            except json.JSONDecodeError as e:
+                # If JSON parsing fails, try to extract directly from the string
+                content = latest_assignment.content
+                if "professor_statement" in content and "assigned_persona" in content:
+                    # Parse the string manually
+                    import ast
+                    assignment_data = ast.literal_eval(content)
+                    professor_statement = assignment_data.get("professor_statement", "")
+                    assigned_persona = assignment_data.get("assigned_persona", "")
+                else:
+                    raise ValueError(f"Could not parse assignment content: {content}")
+        else:
+            # It's a dictionary
+            professor_statement = latest_assignment.get("professor_statement", "")
+            assigned_persona = latest_assignment.get("assigned_persona", "")
         
         if not professor_statement or not assigned_persona:
             raise ValueError("Missing professor statement or assigned persona")
@@ -109,15 +132,32 @@ class ExecutorAgent(BaseAgent):
         - Reference others' points when relevant
         - Ask thoughtful questions
         - Make clear, substantive points
-        - Be concise but thorough
+        - Be concise straight to the point
+        - Very casual and conversational
         
         Do not include any other text, explanations, or formatting - only the JSON object."""
 
     def _create_prompt(self, professor_statement: str, current_discussion: list, persona_data: Dict[str, Any]) -> str:
+        # Convert AIMessages to dict format
+        formatted_discussion = []
+        for entry in current_discussion:
+            if hasattr(entry, 'content'):  # It's an AIMessage or similar
+                formatted_entry = {
+                    "content": entry.content,
+                    "role": getattr(entry, 'role', 'unknown'),
+                    "speaker": getattr(entry, 'speaker', getattr(entry, 'role', 'unknown')),
+                    "references_to_others": getattr(entry, 'references_to_others', []),
+                    "questions_raised": getattr(entry, 'questions_raised', []),
+                    "key_points": getattr(entry, 'key_points', [])
+                }
+                formatted_discussion.append(formatted_entry)
+            else:  # It's already a dict
+                formatted_discussion.append(entry)
+
         return f"""Professor's Question: {professor_statement}
 
 Current Discussion:
-{json.dumps(current_discussion, indent=2)}
+{json.dumps(formatted_discussion, indent=2)}
 
 Respond as {persona_data['name']} to the professor's question, taking into account the current discussion context."""
 

@@ -18,31 +18,32 @@ class AssignmentAgent(BaseAgent):
         current_sequence = state.get("current_sequence")  # Get the current sequence if it exists
 
         # Get the follow-up question from the current sequence if available
-        follow_up_question = None
         if current_sequence and "follow_up_question" in current_sequence:
             follow_up_question = current_sequence["follow_up_question"]
-        
-        if follow_up_question:
-            # If we have a follow-up question, use it directly
             assigned_persona = current_sequence["persona_sequence"][0]
             
             # Check if the assigned persona is a human participant
             is_human = personas.get(assigned_persona, {}).get("is_human", False)
             
-            return {
-                "assignment": {
+            if is_human:
+                # Format the assignment with the expected keys
+                assignment = {
                     "professor_statement": follow_up_question,
                     "assigned_persona": assigned_persona
-                },
-                "messages": [
-                    {
-                        "role": "professor",
-                        "content": follow_up_question
-                    }
-                ],
-                "awaiting_user_input": is_human  # Set flag if human persona is assigned
-            }
-
+                }
+                
+                return {
+                    "assignment": assignment,
+                    "assignments": [assignment],
+                    "awaiting_user_input": True,
+                    "messages": [
+                        {
+                            "role": "professor",
+                            "content": f"{follow_up_question}\n\nPlease provide your response as {personas[assigned_persona]['name']}."
+                        }
+                    ]
+                }
+        
         # Otherwise, fall back to generating a new question
         response = await self.llm.ainvoke([
             SystemMessage(content=self._get_system_prompt()),
@@ -65,13 +66,15 @@ class AssignmentAgent(BaseAgent):
             cleaned_content = cleaned_content.strip()
             
             parsed_data = json.loads(cleaned_content)
+            assignment = parsed_data["assignment"]
             
             return {
-                "assignment": parsed_data["assignment"],
+                "assignment": assignment,
+                "assignments": [assignment],
                 "messages": [
                     {
                         "role": "professor",
-                        "content": parsed_data["assignment"]["professor_statement"]
+                        "content": assignment["professor_statement"]
                     }
                 ]
             }
