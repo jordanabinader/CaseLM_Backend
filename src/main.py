@@ -1,50 +1,270 @@
 # main.py
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Form
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from src.workflow.case_discussion_workflow import CaseDiscussionWorkflow
+import json
+import asyncpg
+from datetime import datetime
 
 app = FastAPI()
 
 class SimulationInput(BaseModel):
-    case_study_id: str
-    user_input: str
+    case_content: str
+    human_participant: Dict[str, Any]
 
-@app.post("/simulate")
-async def run_simulation(input: SimulationInput):
-    # This will be where we handle the simulation
-    return {"status": "processing", "message": "Simulation started"}
+class UserResponse(BaseModel):
+    session_id: str
+    response: str
 
-@app.get("/")
-async def root():
-    return {"message": "Case Study Simulation API"}
+class HumanInputRequest(BaseModel):
+    session_id: str
+    agent_message: str
+    input_type: str  
+    options: Optional[List[str]] = None
 
-# agents.py
-from langgraph.graph import StateGraph, Graph
-from typing import Dict, Any
-from langchain.schema import BaseMessage
-from langchain.chat_models import ChatOpenAI
+# Store active sessions
+active_sessions: Dict[str, Dict[str, Any]] = {}
 
-class SimulationState:
-    def __init__(self):
-        self.messages: List[BaseMessage] = []
-        self.current_step: int = 0
-        self.agent_states: Dict[str, Any] = {}
+# Database connection
+async def get_db_pool():
+    if not hasattr(app.state, "pool"):
+        app.state.pool = await asyncpg.create_pool(
+            "postgresql://postgres.yzaovyzvavjdglfzfdfy:hackathon123@aws-0-us-west-1.pooler.supabase.com:5432/postgres"
+        )
+    return app.state.pool
 
-class CaseStudySimulation:
-    def __init__(self):
-        self.workflow = StateGraph(SimulationState)
-        self.llm = ChatOpenAI()
-    
-    def add_agent(self, name: str, role: str):
-        def agent_node(state: SimulationState):
-            # Agent logic here
-            return state
+@app.post("/start-discussion")
+async def start_discussion(
+    case_content: str = Form(...),
+    human_participant: str = Form(...),
+    case_id: str = Form(...)
+):
+    try:
+        # Parse the form data
+        input_data = SimulationInput(
+            case_content=case_content,
+            human_participant=json.loads(human_participant)
+        )
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO started_cases (
+                    case_id, status
+                ) VALUES ($1, $2)
+                """, case_id, "in_progress")
             
-        self.workflow.add_node(name, agent_node)
+        # Create a new workflow instance
+        workflow = CaseDiscussionWorkflow()
+        
+        # Generate a session ID
+        import uuid
+        session_id = str(uuid.uuid4())
+        
+        # Start the workflow
+        state = await workflow.run(
+            case_content=input_data.case_content,
+            human_participant=input_data.human_participant,
+        )
+        
+        # Store the workflow instance and state
+        active_sessions[session_id] = {
+            "workflow": workflow,
+            "state": state
+        }
+        
+        # If we're awaiting user input, return the prompt
+        if state.get("awaiting_user_input"):
+            return {
+                "status": "awaiting_input",
+                "session_id": session_id,
+                "message": state.get("messages", [])[-1]["content"] if state.get("messages") else "Your response?"
+            }
+        
+        # Otherwise return the complete state
+        return {
+            "status": "complete",
+            "session_id": session_id,
+            "result": state
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    def run(self, initial_input: str):
-        # Run the simulation
-        pass
+@app.post("/submit-response")
+async def submit_response(response: UserResponse):
+    try:
+        session = active_sessions.get(response.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        workflow = session["workflow"]
+        current_state = session["state"]
+        
+        # Validate that we're actually waiting for input
+        if not current_state.get("awaiting_user_input"):
+            raise HTTPException(
+                status_code=400, 
+                detail="Session is not waiting for user input"
+            )
+        
+        # Update the state with user response
+        current_state["user_response"] = response.response
+        
+        # Continue the workflow from the current state
+        async for new_state in workflow.graph.astream(current_state):
+            # Update session state
+            active_sessions[response.session_id]["state"] = new_state
+            
+            # If we're awaiting more user input, return the prompt
+            if new_state.get("awaiting_user_input"):
+                return {
+                    "status": "awaiting_input",
+                    "session_id": response.session_id,
+                    "message": new_state.get("messages", [])[-1]["content"] if new_state.get("messages") else "Your response?",
+                    "input_type": new_state.get("input_type", "text"),
+                    "options": new_state.get("options")
+                }
+            
+            # If workflow is complete, clean up the session
+            if new_state.get("complete"):
+                del active_sessions[response.session_id]
+                return {
+                    "status": "complete",
+                    "result": new_state
+                }
+        
+        # Return the final state if we exit the loop
+        return {
+            "status": "processing",
+            "session_id": response.session_id,
+            "state": new_state
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/request-human-input")
+async def request_human_input(request: HumanInputRequest):
+    try:
+        session = active_sessions.get(request.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session["state"]["awaiting_user_input"] = True
+        session["state"]["messages"].append({"role": "agent", "content": request.agent_message})
+
+        return {
+            "status": "awaiting_input",
+            "session_id": request.session_id,
+            "message": request.agent_message,
+            "input_type": request.input_type,
+            "options": request.options
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/session/{session_id}")
+async def get_session_status(session_id: str):
+    session = active_sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {
+        "status": "awaiting_input" if session["state"].get("awaiting_user_input") else "processing",
+        "state": session["state"]
+    }
+
+
+async def create_personas(data: Dict[str, Any]):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        for persona in data["personas"]:
+            await conn.execute("""
+                INSERT INTO personas (
+                    started_case_id, persona_id, name, role, background, personality,
+                    expertise, is_human
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """, data["started_case_id"], persona["uuid"], persona["name"], 
+                persona["role"], persona["background"],
+                persona["personality"], persona["expertise"], persona["is_human"])
+    return {"status": "success"}
+
+async def create_topics(data: Dict[str, Any]):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        for idx, topic in enumerate(data["topics"], 1):
+            await conn.execute("""
+                INSERT INTO topics (
+                    started_case_id, title, expected_insights, topic_id
+                ) VALUES ($1, $2, $3, $4)
+            """, data["started_case_id"], topic["title"], 
+                topic["expected_insight"], idx)
+    return {"status": "success"}
+
+async def create_message(data: Dict[str, Any]):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO messages (
+                started_case_id, persona_id, user_id, content,
+                is_user_message, metadata
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+        """, data["started_case_id"], data.get("persona_id"),
+            data.get("user_id"), data["content"],
+            data["is_user_message"], data["metadata"])
+    return {"status": "success"}
+
+async def get_unread_messages(started_case_id: int):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        messages = await conn.fetch("""
+            SELECT message_id, content, is_user_message, 
+                   sent_at, metadata
+            FROM messages 
+            WHERE started_case_id = $1 
+            AND read_at IS NULL
+            ORDER BY sent_at ASC
+        """, started_case_id)
+        
+        return [dict(msg) for msg in messages]
+
+@app.get("/health")
+async def health_check():
+    try:
+        # Get database pool
+        pool = await get_db_pool()
+        
+        # Test database connection with a simple query
+        async with pool.acquire() as conn:
+            # Check if we can execute a simple query
+            db_result = await conn.fetchval("SELECT NOW()")
+            
+            # Get some basic stats
+            case_count = await conn.fetchval("SELECT COUNT(*) FROM cases")
+            message_count = await conn.fetchval("SELECT COUNT(*) FROM messages")
+            
+            return {
+                "status": "healthy",
+                "database": {
+                    "connected": True,
+                    "timestamp": db_result,
+                    "stats": {
+                        "total_cases": case_count,
+                        "total_messages": message_count
+                    }
+                }
+            }
+            
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "database": {
+                "connected": False,
+                "error": str(e)
+            }
+        }
 
 # If running directly, start the FastAPI server
 if __name__ == "__main__":

@@ -13,38 +13,60 @@ class AssignmentAgent(BaseAgent):
         super().__init__()  # Call parent class's __init__
 
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    
+    
+        
         current_step = state["current_step"]
         discussion_plan = state["discussion_plan"]
         current_discussion = state["current_discussion"]
         topics = state["topics"]
         personas = state["personas"]
-        current_sequence = state.get("current_sequence")  # Get the current sequence if it exists
+        current_sequence = state.get("current_sequence")
+        
+    
+    
 
         # Get the follow-up question from the current sequence if available
         if current_sequence and "follow_up_question" in current_sequence:
+        
             follow_up_question = current_sequence["follow_up_question"]
             assigned_persona = current_sequence["persona_sequence"][0]
+        
             
-            # Check if the assigned persona is a human participant
-            persona_info = personas[assigned_persona]
+            # Find the persona info by matching UUID
+            assigned_uuid = None
+            assigned_persona_info = None
+            for persona_id, persona_info in personas.items():
+                if persona_info['uuid'] == assigned_persona:
+                    assigned_uuid = persona_info['uuid']
+                    assigned_persona_info = persona_info
+                    break
+            
+            if not assigned_persona_info:
+                raise ValueError(f"Could not find persona info for {assigned_persona}")
+            
+        
+            
             is_human = (
-                persona_info.is_human 
-                if isinstance(persona_info, PersonaInfo) 
-                else persona_info.get("is_human", False)
+                assigned_persona_info.is_human 
+                if isinstance(assigned_persona_info, PersonaInfo) 
+                else assigned_persona_info.get("is_human", False)
             )
+        
             
             if is_human:
+            
                 assignment = Assignment(
                     professor_statement=follow_up_question,
-                    assigned_persona=assigned_persona
+                    assigned_persona=assigned_uuid
                 )
                 
-                # Get name safely whether it's a Pydantic model or dict
                 persona_name = (
-                    persona_info.name 
-                    if isinstance(persona_info, PersonaInfo) 
-                    else persona_info.get("name", assigned_persona)
+                    assigned_persona_info.name 
+                    if isinstance(assigned_persona_info, PersonaInfo) 
+                    else assigned_persona_info.get("name", assigned_persona)
                 )
+            
                 
                 response = AssignmentResponse(
                     assignment=assignment,
@@ -56,24 +78,38 @@ class AssignmentAgent(BaseAgent):
                     }]
                 )
                 
+            
+            
                 return response.model_dump()
         
-        # Generate a new assignment if no follow-up question exists
+    
+    
+        
+        system_prompt = self._get_system_prompt()
+        human_prompt = self._create_prompt(
+            current_step=current_step,
+            discussion_plan=discussion_plan,
+            current_discussion=current_discussion,
+            topics=topics,
+            personas=personas
+        )
+        
+    
+    
+
         response = await self.llm.ainvoke([
-            SystemMessage(content=self._get_system_prompt()),
-            HumanMessage(content=self._create_prompt(
-                current_step=current_step,
-                discussion_plan=discussion_plan,
-                current_discussion=current_discussion,
-                topics=topics,
-                personas=personas
-            ))
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_prompt)
         ])
+        
+    
 
         try:
             cleaned_content = self._clean_and_parse_response(response.content, AssignmentResponse)
+        
             return cleaned_content.model_dump()
         except Exception as e:
+            print(f"Error parsing LLM response: {e}")
             raise ValueError(f"Failed to parse LLM response: {e}")
 
     def _get_system_prompt(self) -> str:

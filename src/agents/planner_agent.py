@@ -39,7 +39,7 @@ class PlannerAgent(BaseAgent):
                     "sequences": [
                         {
                             "topic_index": int,
-                            "persona_sequence": ["persona_id1", "persona_id2", "persona_id3"],
+                            "persona_sequence": ["uuid1", "uuid2", "uuid3"],
                             "follow_up_question": "string"
                         }
                     ],
@@ -57,7 +57,7 @@ class PlannerAgent(BaseAgent):
         
         try:
             parsed_data = self._clean_and_parse_response(response.content, PlannerResponse)
-            
+            print(f"parsed_data: {parsed_data}")
             # Validate sequences
             for sequence in parsed_data.plan.sequences:
                 if not isinstance(sequence, DiscussionPlanSequence):

@@ -5,6 +5,7 @@ from src.agents.base_agent import BaseAgent
 from src.config.settings import settings
 from src.models.discussion_models import PersonaResponse, PersonaInfo
 import json
+import uuid
 
 class PersonaCreatorAgent(BaseAgent):
     def __init__(self):
@@ -27,7 +28,7 @@ class PersonaCreatorAgent(BaseAgent):
                     "background": "string",
                     "expertise": "string",
                     "personality": "string",
-                    "is_human": false,
+                    "is_human": False,
                     "role": "string"
                 }
             }
@@ -78,10 +79,18 @@ class PersonaCreatorAgent(BaseAgent):
             
             # Create final personas dict with human participant as participant_1
             all_personas = {
-                "participant_1": human_persona.model_dump()
+                "participant_1": {
+                    **human_persona.model_dump(),
+                    "uuid": str(uuid.uuid4())
+                }
             }
-            # Add AI personas
-            all_personas.update({k: v.model_dump() for k, v in parsed_data.personas.items()})
+            # Add AI personas with UUIDs
+            all_personas.update({
+                k: {
+                    **v.model_dump(),
+                    "uuid": str(uuid.uuid4())
+                } for k, v in parsed_data.personas.items()
+            })
             
             return {
                 "personas": all_personas,

@@ -38,7 +38,7 @@ class TopicAgent(BaseAgent):
                     "topics": [
                         {
                             "title": "string",
-                            "expected_insights": ["string"]
+                            "expected_insight": "string"
                         }
                     ],
                     "sequence": [0, 1, 2],
