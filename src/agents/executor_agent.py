@@ -68,14 +68,14 @@ class ExecutorAgent(BaseAgent):
             if isinstance(assigned_persona_data, PersonaInfo) 
             else assigned_persona_data.get("is_human", False)
         )
-        
+        print(f"assigned_persona_data: {assigned_persona_data}")
         # Get name safely
         persona_name = (
             assigned_persona_data.name 
             if isinstance(assigned_persona_data, PersonaInfo) 
             else assigned_persona_data.get("name", assigned_persona)
         )
-            
+        
         # Check if this is a human participant
         if is_human:
             return {
@@ -83,6 +83,7 @@ class ExecutorAgent(BaseAgent):
                     "response": {
                         "message": "Awaiting human participant response...",
                         "speaker": assigned_persona,
+                        "uuid": assigned_persona_data['uuid'],
                         "references_to_others": [],
                         "questions_raised": [],
                         "key_points": []
@@ -119,13 +120,17 @@ class ExecutorAgent(BaseAgent):
             else assigned_persona_data.get("role", "")
         )
 
+        # Add this debug print
+        print(f"UUID being passed to system prompt: {assigned_persona_data.get('uuid', 'No UUID found')}")
+
         response = await self.llm.ainvoke([
             SystemMessage(content=self._get_system_prompt({
                 "name": persona_name,
                 "background": background,
                 "expertise": expertise,
                 "personality": personality,
-                "role": role
+                "role": role,
+                "uuid": assigned_persona_data.get('uuid', '')  # Ensure we're getting the UUID
             })),
             HumanMessage(content=self._create_prompt(
                 professor_statement=professor_statement,
@@ -135,7 +140,9 @@ class ExecutorAgent(BaseAgent):
         ])
         
         try:
+            print(f"response: {response}")
             parsed_data = self._clean_and_parse_response(response.content, ExecutorResponse)
+            print(f"parsed_data: {parsed_data}")
             return {
                 "discussion": parsed_data.model_dump(),
                 "awaiting_user_input": False
@@ -150,11 +157,14 @@ class ExecutorAgent(BaseAgent):
         Personality: {persona_data['personality']}
         Role: {persona_data['role']}
 
-        Respond in character to the discussion prompt. Your response must be in JSON format:
+        IMPORTANT: You MUST use this exact UUID in your response: {persona_data['uuid']}
+
+        Respond in character to the discussion prompt. Your response must be in this EXACT JSON format:
         {{
             "response": {{
                 "message": "Your response text",
                 "speaker": "{persona_data['name']}",
+                "uuid": "{persona_data['uuid']}",
                 "references_to_others": ["names of other participants you reference"],
                 "questions_raised": ["questions you pose to others"],
                 "key_points": ["main points you make"]
@@ -162,13 +172,15 @@ class ExecutorAgent(BaseAgent):
         }}
 
         Guidelines:
-        - MOST IMPORTANT: Make your response extremely human like and casual.
+        - MOST IMPORTANT: Talk like a human.
+        - Use '...', "hmm", "um", "like", etc.
+        - Say things that people say in real life (use the word 'like' when giving examples).
+        - No responses should be more than 2-3 sentences.
+        - The UUID field must contain exactly: {persona_data['uuid']}
         - Stay in character
-        - Reference others' points when relevant
-        - Ask thoughtful questions
-        - Make clear, substantive points
+        - Reference others' points 
         - Be concise straight to the point
-        - Very casual and conversational
+        - EXTREMELY casual and HUMAN 
         
         Do not include any other text, explanations, or formatting - only the JSON object."""
 

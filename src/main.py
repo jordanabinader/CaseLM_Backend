@@ -184,11 +184,11 @@ async def create_personas(data: Dict[str, Any]):
             await conn.execute("""
                 INSERT INTO personas (
                     started_case_id, persona_id, name, role, background, personality,
-                    expertise, is_human
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    expertise, is_human, voice
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             """, data["started_case_id"], persona["uuid"], persona["name"], 
                 persona["role"], persona["background"],
-                persona["personality"], persona["expertise"], persona["is_human"])
+                persona["personality"], persona["expertise"], persona["is_human"], persona["voice"])
     return {"status": "success"}
 
 async def create_topics(data: Dict[str, Any]):
@@ -204,28 +204,28 @@ async def create_topics(data: Dict[str, Any]):
     return {"status": "success"}
 
 async def create_message(data: Dict[str, Any]):
+    print(f"data: {data}")
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO messages (
-                started_case_id, persona_id, user_id, content,
-                is_user_message, metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6)
-        """, data["started_case_id"], data.get("persona_id"),
-            data.get("user_id"), data["content"],
-            data["is_user_message"], data["metadata"])
+                started_case_id, persona_id, content,
+                is_human, awaiting_user_input
+            ) VALUES ($1, $2, $3, $4, $5)
+        """, data["started_case_id"], data['persona_id'],
+            data["content"],
+            data["is_user_message"], data["awaiting_user_input"])
     return {"status": "success"}
 
 async def get_unread_messages(started_case_id: int):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         messages = await conn.fetch("""
-            SELECT message_id, content, is_user_message, 
-                   sent_at, metadata
+            SELECT content
             FROM messages 
             WHERE started_case_id = $1 
-            AND read_at IS NULL
-            ORDER BY sent_at ASC
+            AND is_human IS TRUE
+            ORDER BY time_sent ASC
         """, started_case_id)
         
         return [dict(msg) for msg in messages]

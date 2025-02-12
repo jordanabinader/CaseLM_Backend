@@ -72,3 +72,7 @@ try:
 except Exception as e:
     print(f"Error initializing settings: {e}")
     raise
+
+if __name__ == "__main__":
+    print(settings)
+    

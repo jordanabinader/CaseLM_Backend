@@ -34,6 +34,7 @@ class CaseDiscussionWorkflow:
         from src.agents.assignment_agent import AssignmentAgent
         from src.agents.replan_agent import ReplanAgent
         self.API_BASE_URL = "http://localhost:8080"
+        self.professor_uuid = None
         self.started_case_id = uuid.uuid4()
 
         self.orchestrator = OrchestratorAgent()
@@ -95,19 +96,31 @@ class CaseDiscussionWorkflow:
         self.workflow.add_edge("replan_sequence", "assign_discussion")
 
     async def create_personas(self, state: DiscussionState) -> Dict[str, Any]:
+        print(f"Case ID: {self.started_case_id}")
         print("Generating Personas...")
         result = await self.persona_creator.process({
             "case_content": state["case_content"],
             "human_participant": state["human_participant"]
         })
-        print("Generating Personas: Success")
+        self.professor_uuid = result["professor"]["uuid"]
         print(f"result: {result}")
+        print("Generating Personas: Success")
         from src.main import create_personas as db_create_personas
+        from src.main import create_message as db_create_professor
         await db_create_personas({
             "started_case_id": self.started_case_id,
-            "personas": list(result["personas"].values())
+            "personas": list(result["personas"].values()) + [result['professor']]
         })
+        await db_create_professor({
+            "started_case_id": self.started_case_id,
+            "persona_id": result["professor"]["uuid"],
+            "is_user_message": False,
+            "awaiting_user_input": False,
+            "content": result["professor"]["introduction_statement"]
+        })
+
         print("Adding Personas to Database: Success")
+        state["human_participant"]["uuid"] = list(result["personas"].keys())[0]
         return {
             "personas": result["personas"],
             "current_step": "create_personas"
@@ -117,7 +130,6 @@ class CaseDiscussionWorkflow:
         print("Generating Topics...")
         result = await self.topic_agent.process({"case_content": state["case_content"]})
         print("Generating Topics: Success")
-        print(f"result: {result}")
         from src.main import create_topics as db_create_topics
         await db_create_topics({
             "started_case_id": self.started_case_id,
@@ -131,13 +143,11 @@ class CaseDiscussionWorkflow:
 
     async def create_plan(self, state: DiscussionState) -> Dict[str, Any]:
         print("Creating Plan...")
-        print(f"state: {state}")
         result = await self.planner.process({
             "case_content": state["case_content"], 
             "personas": state["personas"],
             "topics": state["topics"]
         })
-        print(f"result: {result}")
         print("Creating Plan: Success")
         return {
             "discussion_plan": result["plan"],
@@ -145,7 +155,6 @@ class CaseDiscussionWorkflow:
         }
 
     async def execute_discussion(self, state: DiscussionState) -> Dict[str, Any]:
-        print("Executing Discussion...")
         result = await self.executor.process({
             "current_step": state["current_step"],
             "discussion_plan": state["discussion_plan"],
@@ -153,36 +162,43 @@ class CaseDiscussionWorkflow:
             "current_discussion": state["current_discussion"],
             "assignments": state["assignments"]
         })
-        print("Executing Discussion: Success")
+        print(f"state: {state}")
         if result.get("awaiting_user_input"):
+            from src.main import create_message as db_create_message
+            print(f"awaiting_user_input ONLINE: {result}")
+            await db_create_message({
+                "started_case_id": self.started_case_id,
+                "persona_id": state["human_participant"]["uuid"],
+                "content": "Awaiting user input...",
+                "awaiting_user_input": True,
+                "is_user_message": False
+            })
+            print("Adding Message awaiting_user_input to Database: Success")
             return {
                 "awaiting_user_input": True,
                 "current_step": "execute_discussion",
                 "messages": result.get("messages", []),
                 "current_discussion": state["current_discussion"]
             }
-        print(f"result: {result}")
         formatted_message = {
             "role": "assistant",
             "content": str(result["discussion"]["response"]["message"]),
             "speaker": result["discussion"]["response"]["speaker"],
+            "uuid": state["personas"].get(result["discussion"]["response"]["speaker"], {}).get("uuid") or result["discussion"]["response"].get("uuid"),
             "references": result["discussion"]["response"].get("references_to_others", []),
             "questions": result["discussion"]["response"].get("questions_raised", []),
             "key_points": result["discussion"]["response"].get("key_points", [])
         }
-        print(f"formatted_message: {formatted_message}")
+        
         # Store message directly in database
         from src.main import create_message as db_create_message
+
         await db_create_message({
             "started_case_id": self.started_case_id,
-            "persona_id": state["personas"].get(formatted_message["speaker"], {}).get("id"),
+            "persona_id": formatted_message["uuid"],
             "content": formatted_message["content"],
             "is_user_message": False,
-            "metadata": {
-                "references": formatted_message["references"],
-                "questions": formatted_message["questions"],
-                "key_points": formatted_message["key_points"]
-            }
+            "awaiting_user_input": False
         })
         print("Adding Message to Database: Success")
         
@@ -245,64 +261,56 @@ class CaseDiscussionWorkflow:
         return {"complete": result["next_step"] == "complete", "current_step": result["next_step"]}
 
     async def handle_user_input(self, state: DiscussionState) -> Dict[str, Any]:
-        if state.get("user_response"):
-            human_participant = state["human_participant"]
-            user_message = {
-                "role": "user",
-                "content": state["user_response"],
-                "speaker": "participant_1",
-                "name": human_participant["name"],
-                "references_to_others": [],
-                "questions_raised": [],
-                "key_points": []
-            }
-            
-            # Store user message in database
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.API_BASE_URL}/messages",
-                    json={
-                        "started_case_id": state.get("started_case_id"),
-                        "user_id": state["human_participant"].get("user_id"),
-                        "content": user_message["content"],
-                        "is_user_message": True,
-                        "metadata": {
-                            "references": user_message["references_to_others"],
-                            "questions": user_message["questions_raised"],
-                            "key_points": user_message["key_points"]
-                        }
-                    }
-                ) as response:
-                    if response.status != 200:
-                        raise Exception(f"Failed to store user message: {await response.text()}")
-            
-            return {
-                "user_inputs": [user_message],
-                "current_discussion": [user_message],
-                "awaiting_user_input": False,
-                "user_response": ""
-            }
+        print("\n=== Starting handle_user_input ===")
+        # Query for the latest human message from the database
         
-        # Query for pending messages
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{self.API_BASE_URL}/messages/unread",
-                params={"started_case_id": state.get("started_case_id")}
-            ) as response:
-                if response.status == 200:
-                    messages = await response.json()
-                    if messages:
-                        return {
-                            "awaiting_user_input": True,
-                            "messages": messages
-                        }
+        from src.main import get_unread_messages
         
+        # Poll for messages with a timeout
+        max_attempts = 60  # 1 minute total (with 1 second sleep)
+        attempt = 0
+        
+        while attempt < max_attempts:
+            print(f"\nPolling attempt {attempt}")
+            messages = await get_unread_messages(self.started_case_id)
+            print(f"Retrieved messages: {messages}")
+            
+            # Find the latest human message
+            human_message = None
+            for msg in messages:
+                print(f"Checking message: {msg}")
+                if msg:
+                    human_message = msg['content']
+                    print(f"Found human message: {human_message}")
+                    break
+            
+            if human_message:
+                user_message = {
+                    "role": "user",
+                    "content": human_message,
+                }
+                print(f"Created user message: {user_message}")
+                
+                return {
+                    "user_inputs": [user_message],
+                    "current_discussion": [user_message],
+                    "awaiting_user_input": False,
+                    "user_response": ""
+                }
+            
+            # Wait before checking again
+            print(f"No message found, waiting...")
+            await asyncio.sleep(0.2)
+            attempt += 0.2
+        
+        print("Timeout reached, still waiting for input")
+        # If we timeout waiting for input
         return {
             "awaiting_user_input": True,
             "messages": [
                 {
                     "role": "system",
-                    "content": "Waiting for your response..."
+                    "content": "Still waiting for your response..."
                 }
             ]
         }
@@ -320,6 +328,14 @@ class CaseDiscussionWorkflow:
             "personas": state["personas"],
             "current_sequence": current_sequence  # Pass the current sequence to use
         })
+        from src.main import create_message as db_create_message
+        await db_create_message({
+                "started_case_id": self.started_case_id,
+                "persona_id": self.professor_uuid,
+                "content": result["assignment"]["professor_statement"],
+                "awaiting_user_input": False,
+                "is_user_message": False
+            })
         print(f"result: {result}")
         assignment_message = {
             "role": "system",
@@ -500,27 +516,27 @@ class CaseDiscussionWorkflow:
                 
                 self.current_state = state  # Update the stored state
                 
-                # If we're awaiting user input, pause here and return the state
-                if state.get("awaiting_user_input"):
-                    # Get the latest assignment message
-                    latest_message = state.get("messages", [])[-1] if state.get("messages") else None
-                    if latest_message:
-                        print("\n" + "="*50)
-                        print("Awaiting user input:")
-                        print(latest_message["content"])
-                        print("="*50 + "\n")
-                    return state
+                # # If we're awaiting user input, pause here and return the state
+                # if state.get("awaiting_user_input"):
+                #     # Get the latest assignment message
+                #     latest_message = state.get("messages", [])[-1] if state.get("messages") else None
+                #     if latest_message:
+                #         print("\n" + "="*50)
+                #         print("Awaiting user input:")
+                #         print(latest_message["content"])
+                #         print("="*50 + "\n")
+                #     return state
                 
-                if state.get("complete"):
-                    final_result = {
-                        "personas": state["personas"],
-                        "discussion_plan": state["discussion_plan"],
-                        "discussions": state["current_discussion"],
-                        "summaries": state["summaries"],
-                        "evaluations": state["evaluations"]
-                    }
-                    print("Workflow complete! Final result:", final_result)
-                    return final_result
+                # if state.get("complete"):
+                #     final_result = {
+                #         "personas": state["personas"],
+                #         "discussion_plan": state["discussion_plan"],
+                #         "discussions": state["current_discussion"],
+                #         "summaries": state["summaries"],
+                #         "evaluations": state["evaluations"]
+                #     }
+                #     print("Workflow complete! Final result:", final_result)
+                #     return final_result
                 
         except Exception as e:
             print(f"Error in workflow: {str(e)}")

@@ -41,6 +41,7 @@ class Persona(BaseModel):
     personality: str
     role: str
     is_human: bool = False
+    voice: str
 
 class DiscussionSequence(BaseModel):
     follow_up_question: str
@@ -95,6 +96,7 @@ class SummaryResponse(BaseModel):
 class ExecutorDiscussionResponse(BaseModel):
     message: str
     speaker: str
+    uuid: str
     references_to_others: List[str] = []
     questions_raised: List[str] = []
     key_points: List[str] = []
@@ -116,9 +118,21 @@ class PersonaInfo(BaseModel):
     personality: str
     is_human: bool = False
     role: str
+    voice: str
+
+class ProfessorInfo(BaseModel):
+    name: str
+    background: str
+    expertise: str
+    personality: str
+    introduction_statement: str
+    voice: str
+    is_human: bool = False
+    role: str = "Professor"
 
 class PersonaResponse(BaseModel):
     personas: Dict[str, PersonaInfo]
+    professor: ProfessorInfo
 
 class ReplanResponse(BaseModel):
     updated_plan: DiscussionPlan
