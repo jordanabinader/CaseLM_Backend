@@ -60,6 +60,7 @@ async def start_discussion(request: Request, data: dict):
     user_profile = json.loads(user_profile)
     human_participant = user_profile.get("human_participant", "")
     case_id = data.get("case_id", "")
+    startup_case_id = data.get("startup_case_id", "")
 
     try:
         # Parse the form data
@@ -80,10 +81,8 @@ async def start_discussion(request: Request, data: dict):
             )
 
         # Create a new workflow instance
-        workflow = CaseDiscussionWorkflow()
+        workflow = CaseDiscussionWorkflow(startup_case_id)
         started_case_id = workflow.started_case_id
-
-        print("2")
 
         session_id = str(uuid.uuid4())
 
@@ -92,8 +91,6 @@ async def start_discussion(request: Request, data: dict):
             case_content=input_data.case_content,
             human_participant=input_data.human_participant,
         )
-
-        print("3")
 
         # Store the workflow instance and state
         active_sessions[session_id] = {"workflow": workflow, "state": state}

@@ -37,10 +37,10 @@ class DiscussionState(TypedDict):
 
 
 class CaseDiscussionWorkflow:
-    def __init__(self):
+    def __init__(self, startup_case_id):
         self.API_BASE_URL = "http://localhost:8080"
         self.professor_uuid = None
-        self.started_case_id = uuid.uuid4()
+        self.started_case_id = startup_case_id
         self.professor_introduction_statement = None
         self.START = True
 
