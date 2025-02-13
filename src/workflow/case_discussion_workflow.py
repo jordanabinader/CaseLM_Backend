@@ -330,7 +330,7 @@ class CaseDiscussionWorkflow:
         print("\n=== Starting handle_user_input ===")
         # Query for the latest human message from tmain
 
-        from src.main import get_unread_messages
+        from src.main import get_unread_messages, switch_unread_messages_to_read
 
         # Poll for messages with a timeout
         max_attempts = 120
@@ -356,7 +356,7 @@ class CaseDiscussionWorkflow:
                     "content": human_message,
                 }
                 print(f"Created user message: {user_message}")
-
+                await switch_unread_messages_to_read(self.started_case_id)
                 return {
                     **state,
                     "user_inputs": [user_message],

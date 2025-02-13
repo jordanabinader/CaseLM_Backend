@@ -6,11 +6,11 @@ import json
 router = APIRouter()
 client = OpenAI()
 
-@router.websocket("/ws/speech-to-text")
-async def websocket_endpoint(websocket: WebSocket):
+@router.websocket("/ws/speech-to-text/{started_case_id}")
+async def websocket_endpoint(websocket: WebSocket, started_case_id: str):
     try:
         await websocket.accept()
-        print("WebSocket connection accepted")
+        print(f"WebSocket connection accepted for case ID: {started_case_id}")
         
         while True:
             print("Waiting for audio data...")
@@ -32,7 +32,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
             print("Saving message to database...")
             await db_create_message(websocket.app, {
-                "started_case_id": '56196549-7527-4d86-a20e-9636b472a98e',
+                "started_case_id": started_case_id,
                 "content": transcription.text,
                 "is_user_message": True,
                 "awaiting_user_input": False

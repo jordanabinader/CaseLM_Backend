@@ -73,10 +73,10 @@ async def start_discussion(request: Request, data: dict):
             await conn.execute(
                 """
                 INSERT INTO started_cases (
-                    case_id, status
+                    started_case_id, status
                 ) VALUES ($1, $2)
                 """,
-                case_id,
+                startup_case_id,
                 "in_progress",
             )
 
@@ -292,6 +292,20 @@ async def get_unread_messages(started_case_id: int):
         )
 
         return [dict(msg) for msg in messages]
+    
+async def switch_unread_messages_to_read(started_case_id: int):
+    pool = await get_db_pool(app)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE messages
+            SET is_human = FALSE
+            WHERE started_case_id = $1 
+            AND is_human IS TRUE
+            ORDER BY time_sent ASC
+        """,
+            started_case_id,
+        )
 
 
 @app.get("/health")
