@@ -1,256 +1,200 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
-    <title>Speech-to-Text Test</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Start Discussion</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
+        .container {
             max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
+            margin: 2rem auto;
+            padding: 1rem;
         }
 
-        .controls {
-            margin: 20px 0;
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+
+        textarea,
+        input {
+            width: 100%;
+            padding: 0.5rem;
+            margin-bottom: 0.5rem;
         }
 
         button {
-            padding: 10px 20px;
-            margin: 0 10px;
+            background-color: #007bff;
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
             cursor: pointer;
         }
 
-        #transcription {
-            margin-top: 20px;
-            padding: 10px;
-            border: 1px solid #ccc;
-            min-height: 100px;
-            max-height: 400px;
-            overflow-y: auto;
+        button:hover {
+            background-color: #0056b3;
         }
 
-        #status {
-            margin-top: 10px;
-            color: #666;
+        .response {
+            margin-top: 1rem;
+            padding: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: none;
         }
 
-        .recording {
-            background-color: #ff4444;
-            color: white;
-        }
-
-        #visualizer {
-            width: 100%;
-            height: 60px;
-            margin: 10px 0;
-            background: #f0f0f0;
+        .participant-fields {
+            padding: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 1rem;
         }
     </style>
 </head>
 
 <body>
-    <h1>Speech-to-Text Test</h1>
+    <div class="container">
+        <h1>Start Discussion</h1>
+        <form id="discussionForm">
+            <div class="form-group">
+                <label for="caseContent">Case Content:</label>
+                <textarea id="caseContent" name="case_content" rows="4" required></textarea>
+            </div>
 
-    <div class="controls">
-        <button id="startRecording">Start Recording</button>
-        <button id="stopRecording" disabled>Stop Recording</button>
+            <div class="participant-fields">
+                <h3>Human Participant Details</h3>
+                <div class="form-group">
+                    <label for="name">Name:</label>
+                    <input type="text" id="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="background">Background:</label>
+                    <input type="text" id="background" required>
+                </div>
+                <div class="form-group">
+                    <label for="expertise">Expertise:</label>
+                    <input type="text" id="expertise" required>
+                </div>
+                <div class="form-group">
+                    <label for="personality">Personality:</label>
+                    <input type="text" id="personality" required>
+                </div>
+                <div class="form-group">
+                    <label for="role">Role:</label>
+                    <input type="text" id="role" required>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="isHuman" checked> Is Human
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="caseId">Case ID:</label>
+                <input type="text" id="caseId" name="case_id" required>
+            </div>
+
+            <button type="submit" id="submitBtn">Start Discussion</button>
+        </form>
+        <div id="response" class="response"></div>
     </div>
 
-    <canvas id="visualizer"></canvas>
-    <div id="status">Status: Not connected</div>
-    <div id="transcription"></div>
-
     <script>
-        let mediaRecorder;
-        let audioChunks = [];
-        let socket;
-        let isConnected = false;
-        let audioContext;
-        let analyser;
-        let visualizerCanvas;
-        let canvasCtx;
-        let animationId;
+        // Wait for DOM to be fully loaded
+        document.addEventListener('DOMContentLoaded', function () {
+            const form = document.getElementById('discussionForm');
+            const submitBtn = document.getElementById('submitBtn');
 
-        function setupVisualizer(stream) {
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            }
+            // Pre-fill the form with example data
+            document.getElementById('name').value = "Jordan";
+            document.getElementById('background').value = "Research Scientist at DeepMind with experience in AI/ML products";
+            document.getElementById('expertise').value = "Research in AI/ML products";
+            document.getElementById('personality').value = "Technical and Strategic thinker with customer focus";
+            document.getElementById('role').value = "Research Scientist";
+            document.getElementById('isHuman').checked = true;
 
-            const source = audioContext.createMediaStreamSource(stream);
-            analyser = audioContext.createAnalyser();
-            analyser.fftSize = 256;
-            source.connect(analyser);
+            form.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                submitBtn.disabled = true;
 
-            visualizerCanvas = document.getElementById('visualizer');
-            canvasCtx = visualizerCanvas.getContext('2d');
-
-            function drawVisualizer() {
-                const bufferLength = analyser.frequencyBinCount;
-                const dataArray = new Uint8Array(bufferLength);
-
-                function draw() {
-                    animationId = requestAnimationFrame(draw);
-                    analyser.getByteFrequencyData(dataArray);
-
-                    canvasCtx.fillStyle = '#f0f0f0';
-                    canvasCtx.fillRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
-
-                    const barWidth = (visualizerCanvas.width / bufferLength) * 2.5;
-                    let barHeight;
-                    let x = 0;
-
-                    for (let i = 0; i < bufferLength; i++) {
-                        barHeight = dataArray[i] / 2;
-                        canvasCtx.fillStyle = `rgb(${barHeight + 100}, 50, 50)`;
-                        canvasCtx.fillRect(x, visualizerCanvas.height - barHeight, barWidth, barHeight);
-                        x += barWidth + 1;
-                    }
-                }
-
-                draw();
-            }
-
-            drawVisualizer();
-        }
-
-        function stopVisualizer() {
-            if (animationId) {
-                cancelAnimationFrame(animationId);
-            }
-            if (audioContext) {
-                audioContext.close();
-                audioContext = null;
-            }
-            if (canvasCtx) {
-                canvasCtx.clearRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
-            }
-        }
-
-        function connectWebSocket() {
-            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${wsProtocol}//${window.location.host}/ws/speech-to-text`;
-            console.log('Connecting to WebSocket:', wsUrl);
-
-            socket = new WebSocket(wsUrl);
-
-            socket.onopen = () => {
-                console.log('WebSocket connected');
-                isConnected = true;
-                statusDiv.textContent = 'Status: Connected';
-                statusDiv.style.color = 'green';
-            };
-
-            socket.onclose = () => {
-                console.log('WebSocket disconnected');
-                isConnected = false;
-                statusDiv.textContent = 'Status: Disconnected';
-                statusDiv.style.color = 'red';
-                setTimeout(connectWebSocket, 2000);
-            };
-
-            socket.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                statusDiv.textContent = 'Status: Error';
-                statusDiv.style.color = 'red';
-            };
-
-            socket.onmessage = (event) => {
-                console.log('Received message:', event.data);
-                const data = JSON.parse(event.data);
-                if (data.error) {
-                    transcriptionDiv.innerHTML += `<p style="color: red">Error: ${data.error}</p>`;
-                } else {
-                    transcriptionDiv.innerHTML += `<p>${data.text}</p>`;
-                    transcriptionDiv.scrollTop = transcriptionDiv.scrollHeight;
-                }
-            };
-        }
-
-        const startButton = document.getElementById('startRecording');
-        const stopButton = document.getElementById('stopRecording');
-        const statusDiv = document.getElementById('status');
-        const transcriptionDiv = document.getElementById('transcription');
-
-        startButton.addEventListener('click', async () => {
-            try {
-                if (!isConnected) {
-                    statusDiv.textContent = 'Status: Reconnecting...';
-                    connectWebSocket();
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                }
-
-                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    throw new Error('Media devices API not supported in this browser');
-                }
-
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                setupVisualizer(stream);
-
-                mediaRecorder = new MediaRecorder(stream);
-                audioChunks = [];
-
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) {
-                        audioChunks.push(event.data);
-                    }
+                // Create the human participant object
+                const humanParticipant = {
+                    name: document.getElementById('name').value,
+                    background: document.getElementById('background').value,
+                    expertise: document.getElementById('expertise').value,
+                    personality: document.getElementById('personality').value,
+                    is_human: document.getElementById('isHuman').checked,
+                    role: document.getElementById('role').value
                 };
 
-                mediaRecorder.onstop = async () => {
-                    if (!isConnected) {
-                        statusDiv.textContent = 'Status: WebSocket disconnected. Cannot send audio.';
-                        return;
-                    }
+                const formData = new URLSearchParams();
+                formData.append('case_content', document.getElementById('caseContent').value);
+                formData.append('human_participant', JSON.stringify(humanParticipant));
+                formData.append('case_id', document.getElementById('caseId').value);
 
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/mp3' });
+                try {
+                    console.log('Sending request to:', window.location.origin + '/start-discussion');
+                    console.log('Request payload:', Object.fromEntries(formData));
+
+                    const response = await fetch('/start-discussion', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'Accept': 'application/json'
+                        },
+                        body: formData.toString()
+                    });
+
+                    const responseText = await response.text();
+                    console.log('Raw server response:', responseText);
+
+                    let data;
                     try {
-                        await socket.send(await audioBlob.arrayBuffer());
-                    } catch (error) {
-                        console.error('Error sending audio:', error);
-                        statusDiv.textContent = 'Status: Error sending audio';
-                        statusDiv.style.color = 'red';
+                        data = JSON.parse(responseText);
+                    } catch (e) {
+                        throw new Error(`Failed to parse JSON response: ${responseText}`);
                     }
-                    audioChunks = [];
-                };
 
-                mediaRecorder.start(1000);
-                statusDiv.textContent = 'Status: Recording...';
-                statusDiv.style.color = 'green';
-                startButton.disabled = true;
-                stopButton.disabled = false;
-                startButton.classList.add('recording');
+                    const responseDiv = document.getElementById('response');
+                    responseDiv.style.display = 'block';
 
-            } catch (error) {
-                console.error('Error starting recording:', error);
-                statusDiv.textContent = `Status: Error - ${error.message}`;
-                statusDiv.style.color = 'red';
-            }
+                    if (response.ok) {
+                        if (data.status === 'awaiting_input') {
+                            responseDiv.innerHTML = `
+                                <p>Session ID: ${data.session_id}</p>
+                                <p>Message: ${data.message}</p>
+                            `;
+                        } else {
+                            responseDiv.innerHTML = `
+                                <p>Session ID: ${data.session_id}</p>
+                                <p>Status: Complete</p>
+                                <pre>${JSON.stringify(data.result, null, 2)}</pre>
+                            `;
+                        }
+                    } else {
+                        const errorMessage = data.detail || data.message || JSON.stringify(data);
+                        responseDiv.innerHTML = `
+                            <p style="color: red;">Error: ${errorMessage}</p>
+                            <pre style="color: #666; font-size: 0.8em;">${JSON.stringify(data, null, 2)}</pre>
+                        `;
+                    }
+                } catch (error) {
+                    const responseDiv = document.getElementById('response');
+                    responseDiv.style.display = 'block';
+                    responseDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+                    console.error('Request error:', error);
+                } finally {
+                    submitBtn.disabled = false;
+                }
+            });
         });
-
-        stopButton.addEventListener('click', () => {
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                mediaRecorder.stop();
-                stopVisualizer();
-                statusDiv.textContent = 'Status: Processing...';
-                startButton.disabled = false;
-                stopButton.disabled = true;
-                startButton.classList.remove('recording');
-            }
-        });
-
-        // Handle page unload
-        window.addEventListener('beforeunload', () => {
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                mediaRecorder.stop();
-                stopVisualizer();
-            }
-            if (socket) {
-                socket.close();
-            }
-        });
-
-        // Initial connection
-        connectWebSocket();
     </script>
 </body>
 

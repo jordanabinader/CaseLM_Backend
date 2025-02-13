@@ -18,9 +18,9 @@ forwarded_allow_ips = "*"
 secure_scheme_headers = {"X-Forwarded-Proto": "https"}
 
 # SSL configuration
-certfile = "cert.pem"
-keyfile = "key.pem"
+# certfile = "cert.pem"
+# keyfile = "key.pem"
 
-# Make sure the cert files exist
-if not os.path.exists(certfile) or not os.path.exists(keyfile):
-    raise RuntimeError(f"SSL certificate files not found: {certfile} and {keyfile}")
+# # Make sure the cert files exist
+# if not os.path.exists(certfile) or not os.path.exists(keyfile):
+#     raise RuntimeError(f"SSL certificate files not found: {certfile} and {keyfile}")

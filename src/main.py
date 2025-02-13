@@ -10,11 +10,18 @@ from src.api.endpoints.websocket import router as websocket_router
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
 app.include_router(websocket_router, tags=["websocket"])
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 static_dir = os.path.join(current_dir, "static")
 
@@ -60,7 +67,7 @@ async def start_discussion(
             
         # Create a new workflow instance
         workflow = CaseDiscussionWorkflow()
-        
+        started_case_id = workflow.started_case_id
         # Generate a session ID
         import uuid
         session_id = str(uuid.uuid4())
@@ -81,14 +88,14 @@ async def start_discussion(
         if state.get("awaiting_user_input"):
             return {
                 "status": "awaiting_input",
-                "session_id": session_id,
+                "started_case_id": started_case_id,
                 "message": state.get("messages", [])[-1]["content"] if state.get("messages") else "Your response?"
             }
         
         # Otherwise return the complete state
         return {
             "status": "complete",
-            "session_id": session_id,
+            "started_case_id": started_case_id,
             "result": state
         }
         

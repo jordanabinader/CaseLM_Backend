@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Speech-to-Text Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .controls {
+            margin: 20px 0;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin: 0 10px;
+            cursor: pointer;
+        }
+
+        #transcription {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            min-height: 100px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        #status {
+            margin-top: 10px;
+            color: #666;
+        }
+
+        .recording {
+            background-color: #ff4444;
+            color: white;
+        }
+
+        #visualizer {
+            width: 100%;
+            height: 60px;
+            margin: 10px 0;
+            background: #f0f0f0;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Speech-to-Text Test</h1>
+
+    <div class="controls">
+        <button id="startRecording">Start Recording</button>
+        <button id="stopRecording" disabled>Stop Recording</button>
+    </div>
+
+    <canvas id="visualizer"></canvas>
+    <div id="status">Status: Not connected</div>
+    <div id="transcription"></div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let socket;
+        let isConnected = false;
+        let audioContext;
+        let analyser;
+        let visualizerCanvas;
+        let canvasCtx;
+        let animationId;
+
+        function setupVisualizer(stream) {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+
+            visualizerCanvas = document.getElementById('visualizer');
+            canvasCtx = visualizerCanvas.getContext('2d');
+
+            function drawVisualizer() {
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Uint8Array(bufferLength);
+
+                function draw() {
+                    animationId = requestAnimationFrame(draw);
+                    analyser.getByteFrequencyData(dataArray);
+
+                    canvasCtx.fillStyle = '#f0f0f0';
+                    canvasCtx.fillRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+
+                    const barWidth = (visualizerCanvas.width / bufferLength) * 2.5;
+                    let barHeight;
+                    let x = 0;
+
+                    for (let i = 0; i < bufferLength; i++) {
+                        barHeight = dataArray[i] / 2;
+                        canvasCtx.fillStyle = `rgb(${barHeight + 100}, 50, 50)`;
+                        canvasCtx.fillRect(x, visualizerCanvas.height - barHeight, barWidth, barHeight);
+                        x += barWidth + 1;
+                    }
+                }
+
+                draw();
+            }
+
+            drawVisualizer();
+        }
+
+        function stopVisualizer() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            if (canvasCtx) {
+                canvasCtx.clearRect(0, 0, visualizerCanvas.width, visualizerCanvas.height);
+            }
+        }
+
+        function connectWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}/ws/speech-to-text`;
+            console.log('Connecting to WebSocket:', wsUrl);
+
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+                console.log('WebSocket connected');
+                isConnected = true;
+                statusDiv.textContent = 'Status: Connected';
+                statusDiv.style.color = 'green';
+            };
+
+            socket.onclose = () => {
+                console.log('WebSocket disconnected');
+                isConnected = false;
+                statusDiv.textContent = 'Status: Disconnected';
+                statusDiv.style.color = 'red';
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            socket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                statusDiv.textContent = 'Status: Error';
+                statusDiv.style.color = 'red';
+            };
+
+            socket.onmessage = (event) => {
+                console.log('Received message:', event.data);
+                const data = JSON.parse(event.data);
+                if (data.error) {
+                    transcriptionDiv.innerHTML += `<p style="color: red">Error: ${data.error}</p>`;
+                } else {
+                    transcriptionDiv.innerHTML += `<p>${data.text}</p>`;
+                    transcriptionDiv.scrollTop = transcriptionDiv.scrollHeight;
+                }
+            };
+        }
+
+        const startButton = document.getElementById('startRecording');
+        const stopButton = document.getElementById('stopRecording');
+        const statusDiv = document.getElementById('status');
+        const transcriptionDiv = document.getElementById('transcription');
+
+        startButton.addEventListener('click', async () => {
+            try {
+                if (!isConnected) {
+                    statusDiv.textContent = 'Status: Reconnecting...';
+                    connectWebSocket();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('Media devices API not supported in this browser');
+                }
+
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                setupVisualizer(stream);
+
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = async () => {
+                    if (!isConnected) {
+                        statusDiv.textContent = 'Status: WebSocket disconnected. Cannot send audio.';
+                        return;
+                    }
+
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/mp3' });
+                    try {
+                        await socket.send(await audioBlob.arrayBuffer());
+                    } catch (error) {
+                        console.error('Error sending audio:', error);
+                        statusDiv.textContent = 'Status: Error sending audio';
+                        statusDiv.style.color = 'red';
+                    }
+                    audioChunks = [];
+                };
+
+                mediaRecorder.start(1000);
+                statusDiv.textContent = 'Status: Recording...';
+                statusDiv.style.color = 'green';
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                startButton.classList.add('recording');
+
+            } catch (error) {
+                console.error('Error starting recording:', error);
+                statusDiv.textContent = `Status: Error - ${error.message}`;
+                statusDiv.style.color = 'red';
+            }
+        });
+
+        stopButton.addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                stopVisualizer();
+                statusDiv.textContent = 'Status: Processing...';
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                startButton.classList.remove('recording');
+            }
+        });
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                stopVisualizer();
+            }
+            if (socket) {
+                socket.close();
+            }
+        });
+
+        // Initial connection
+        connectWebSocket();
+    </script>
+</body>
+
+</html>
