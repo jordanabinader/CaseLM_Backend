@@ -33,9 +33,13 @@ class CaseDiscussionWorkflow:
         from src.agents.topic_agent import TopicAgent
         from src.agents.assignment_agent import AssignmentAgent
         from src.agents.replan_agent import ReplanAgent
+        from src.agents.direct_human_response_agent import DirectHumanResponseAgent
+        
         self.API_BASE_URL = "http://localhost:8080"
         self.professor_uuid = None
         self.started_case_id = uuid.uuid4()
+        self.professor_introduction_statement = None
+        self.START = True
 
         self.orchestrator = OrchestratorAgent()
         self.planner = PlannerAgent()
@@ -46,7 +50,7 @@ class CaseDiscussionWorkflow:
         self.topic_agent = TopicAgent()
         self.assignment_agent = AssignmentAgent()
         self.replan_agent = ReplanAgent()
-
+        self.direct_human_response_agent = DirectHumanResponseAgent()
         self.workflow = StateGraph(DiscussionState)
 
         self.setup_nodes()
@@ -65,6 +69,7 @@ class CaseDiscussionWorkflow:
         self.workflow.add_node("handle_user_input", self.handle_user_input)
         self.workflow.add_node("assign_discussion", self.assign_discussion)
         self.workflow.add_node("replan_sequence", self.replan_sequence)
+        self.workflow.add_node("direct_human_response_agent", self.direct_human_response)
 
     def setup_edges(self):
         self.workflow.add_edge(START, "create_personas")
@@ -73,7 +78,8 @@ class CaseDiscussionWorkflow:
         self.workflow.add_conditional_edges("create_topics", self.topic_creation_condition, {"create_plan": "create_plan", END: END})
         self.workflow.add_conditional_edges("create_plan", self.planning_condition, {"assign_discussion": "assign_discussion", END: END})
         self.workflow.add_conditional_edges("assign_discussion", self.assignment_condition, {"execute_discussion": "execute_discussion", END: END})
-        self.workflow.add_edge("handle_user_input", "evaluate_discussion")
+        self.workflow.add_edge("handle_user_input", "direct_human_response_agent")
+        self.workflow.add_edge("direct_human_response_agent", "evaluate_discussion")
         self.workflow.add_conditional_edges(
             "execute_discussion",
             self.user_input_condition,
@@ -102,24 +108,20 @@ class CaseDiscussionWorkflow:
             "case_content": state["case_content"],
             "human_participant": state["human_participant"]
         })
+        print(f"state['human_participant']: {state['human_participant']}")
         self.professor_uuid = result["professor"]["uuid"]
+        self.professor_introduction_statement = result["professor"]["introduction_statement"]
+        test_url = f"http://localhost:8080/test.html?started_case_id={self.started_case_id}&persona_id={state['human_participant']['uuid']}"
+        print(f"Open this URL to start voice input: {test_url}")
         print(f"result: {result}")
         print("Generating Personas: Success")
         from src.main import create_personas as db_create_personas
-        from src.main import create_message as db_create_professor
         await db_create_personas({
             "started_case_id": self.started_case_id,
             "personas": list(result["personas"].values()) + [result['professor']]
         })
-        await db_create_professor({
-            "started_case_id": self.started_case_id,
-            "persona_id": result["professor"]["uuid"],
-            "is_user_message": False,
-            "awaiting_user_input": False,
-            "content": result["professor"]["introduction_statement"]
-        })
 
-        print("Adding Personas to Database: Success")
+        print("Adding Personas main: Success")
         state["human_participant"]["uuid"] = list(result["personas"].keys())[0]
         return {
             "personas": result["personas"],
@@ -135,7 +137,7 @@ class CaseDiscussionWorkflow:
             "started_case_id": self.started_case_id,
             "topics": result["plan"]['topics']
         })
-        print("Adding Topics to Database: Success")
+        print("Adding Topics main: Success")
         return {
             "topics": result["plan"],
             "current_step": "create_topics"
@@ -173,7 +175,7 @@ class CaseDiscussionWorkflow:
                 "awaiting_user_input": True,
                 "is_user_message": False
             })
-            print("Adding Message awaiting_user_input to Database: Success")
+            print("Adding Message awaiting_user_input main: Success")
             return {
                 "awaiting_user_input": True,
                 "current_step": "execute_discussion",
@@ -190,7 +192,7 @@ class CaseDiscussionWorkflow:
             "key_points": result["discussion"]["response"].get("key_points", [])
         }
         
-        # Store message directly in database
+        # Store message directly main
         from src.main import create_message as db_create_message
 
         await db_create_message({
@@ -200,7 +202,7 @@ class CaseDiscussionWorkflow:
             "is_user_message": False,
             "awaiting_user_input": False
         })
-        print("Adding Message to Database: Success")
+        print("Adding Message main: Success")
         
         return {
             "current_discussion": [formatted_message],
@@ -260,14 +262,30 @@ class CaseDiscussionWorkflow:
 
         return {"complete": result["next_step"] == "complete", "current_step": result["next_step"]}
 
+    async def direct_human_response(self, state: DiscussionState) -> Dict[str, Any]:
+        print(f"state: {state}")
+        result = await self.direct_human_response_agent.process({
+            "user_inputs": state["user_inputs"],
+            "case_content": state["case_content"]
+        })
+        from src.main import create_message as db_create_message
+        await db_create_message({
+            "started_case_id": self.started_case_id,
+            "persona_id": self.professor_uuid,
+            "content": result["answer"]["answer"]["content"],
+            "is_user_message": False,
+            "awaiting_user_input": False
+        })
+        return result
+
     async def handle_user_input(self, state: DiscussionState) -> Dict[str, Any]:
         print("\n=== Starting handle_user_input ===")
-        # Query for the latest human message from the database
+        # Query for the latest human message from tmain
         
         from src.main import get_unread_messages
         
         # Poll for messages with a timeout
-        max_attempts = 60  # 1 minute total (with 1 second sleep)
+        max_attempts = 120  
         attempt = 0
         
         while attempt < max_attempts:
@@ -292,6 +310,7 @@ class CaseDiscussionWorkflow:
                 print(f"Created user message: {user_message}")
                 
                 return {
+                    **state,
                     "user_inputs": [user_message],
                     "current_discussion": [user_message],
                     "awaiting_user_input": False,
@@ -328,7 +347,19 @@ class CaseDiscussionWorkflow:
             "personas": state["personas"],
             "current_sequence": current_sequence  # Pass the current sequence to use
         })
+        print(f"result: {result}")
         from src.main import create_message as db_create_message
+        from src.main import create_message as db_create_professor
+        if self.START == True:
+            await db_create_professor({
+                "started_case_id": self.started_case_id,
+                "persona_id": self.professor_uuid,
+                "is_user_message": False,
+                "awaiting_user_input": False,
+                "content": self.professor_introduction_statement
+            })
+            self.START = False
+        print(f"result added to db")
         await db_create_message({
                 "started_case_id": self.started_case_id,
                 "persona_id": self.professor_uuid,

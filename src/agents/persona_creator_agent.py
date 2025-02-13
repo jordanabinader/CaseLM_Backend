@@ -113,6 +113,7 @@ class PersonaCreatorAgent(BaseAgent):
             
             # Create final personas dict with human participant
             human_persona_dict = human_persona.model_dump()
+            human_participant["uuid"] = human_uuid
             human_persona_dict["uuid"] = human_uuid
             all_personas = {
                 human_uuid: human_persona_dict

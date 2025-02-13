@@ -10,3 +10,5 @@ langchain-community
 openai
 gunicorn
 asyncpq
+websockets
+python-multipart

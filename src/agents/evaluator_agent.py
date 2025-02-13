@@ -31,10 +31,7 @@ class EvaluatorAgent(BaseAgent):
                - Create hypothetical scenarios that test their theories
 
             3. Drive deeper analysis:
-               - Push students to consider real-world implications
-               - Ask for specific examples and applications
                - Challenge students to defend their positions
-               - Guide students to examine alternative perspectives
 
             You must choose ONE of these actions:
             1. CONTINUE: Challenge the current line of thinking with a provocative follow-up question
@@ -54,6 +51,9 @@ class EvaluatorAgent(BaseAgent):
             }
 
             Important criteria:
+            - MOST IMPORTANT: Talk like a human.
+            - Use '...', "hmm", "um", "like", etc.
+            - Say things that people say in real life (use the word 'like' when giving examples).
             - Always push for deeper analysis and critical thinking
             - MOST IMPORTANT: Challenge students to defend and justify their positions
             - Ask to clarify their position and ALWAYS ask follow up questions, especially if the participant is the human

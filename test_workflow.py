@@ -33,7 +33,7 @@ Questions for Discussion:
 
 # Define the human participant
 HUMAN_PARTICIPANT = {
-    "name": "Jordan",  # or any name you prefer
+    "name": "Jordan",  
     "background": "Research Scientist at DeepMind with experience in AI/ML products",
     "expertise": "Research in AI/ML products",
     "personality": "Technical and Strategic thinker with customer focus",

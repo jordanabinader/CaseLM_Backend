@@ -5,9 +5,20 @@ from typing import List, Dict, Any, Optional
 from src.workflow.case_discussion_workflow import CaseDiscussionWorkflow
 import json
 import asyncpg
-from datetime import datetime
+from src.db.database import get_db_pool
+from src.api.endpoints.websocket import router as websocket_router
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
 
 app = FastAPI()
+
+app.include_router(websocket_router, tags=["websocket"])
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(current_dir, "static")
+
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 class SimulationInput(BaseModel):
     case_content: str
@@ -26,13 +37,6 @@ class HumanInputRequest(BaseModel):
 # Store active sessions
 active_sessions: Dict[str, Dict[str, Any]] = {}
 
-# Database connection
-async def get_db_pool():
-    if not hasattr(app.state, "pool"):
-        app.state.pool = await asyncpg.create_pool(
-            "postgresql://postgres.yzaovyzvavjdglfzfdfy:hackathon123@aws-0-us-west-1.pooler.supabase.com:5432/postgres"
-        )
-    return app.state.pool
 
 @app.post("/start-discussion")
 async def start_discussion(
@@ -46,7 +50,7 @@ async def start_discussion(
             case_content=case_content,
             human_participant=json.loads(human_participant)
         )
-        pool = await get_db_pool()
+        pool = await get_db_pool(app)
         async with pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO started_cases (
@@ -178,7 +182,7 @@ async def get_session_status(session_id: str):
 
 
 async def create_personas(data: Dict[str, Any]):
-    pool = await get_db_pool()
+    pool = await get_db_pool(app)
     async with pool.acquire() as conn:
         for persona in data["personas"]:
             await conn.execute("""
@@ -192,7 +196,7 @@ async def create_personas(data: Dict[str, Any]):
     return {"status": "success"}
 
 async def create_topics(data: Dict[str, Any]):
-    pool = await get_db_pool()
+    pool = await get_db_pool(app)
     async with pool.acquire() as conn:
         for idx, topic in enumerate(data["topics"], 1):
             await conn.execute("""
@@ -205,7 +209,7 @@ async def create_topics(data: Dict[str, Any]):
 
 async def create_message(data: Dict[str, Any]):
     print(f"data: {data}")
-    pool = await get_db_pool()
+    pool = await get_db_pool(app)
     async with pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO messages (
@@ -218,7 +222,7 @@ async def create_message(data: Dict[str, Any]):
     return {"status": "success"}
 
 async def get_unread_messages(started_case_id: int):
-    pool = await get_db_pool()
+    pool = await get_db_pool(app)
     async with pool.acquire() as conn:
         messages = await conn.fetch("""
             SELECT content
@@ -234,7 +238,7 @@ async def get_unread_messages(started_case_id: int):
 async def health_check():
     try:
         # Get database pool
-        pool = await get_db_pool()
+        pool = await get_db_pool(app)
         
         # Test database connection with a simple query
         async with pool.acquire() as conn:
@@ -265,6 +269,14 @@ async def health_check():
                 "error": str(e)
             }
         }
+
+@app.get("/")
+async def root():
+    return FileResponse(os.path.join(static_dir, "test.html"))
+
+@app.get("/test-stt")
+async def test_stt():
+    return FileResponse("src/static/test.html")
 
 # If running directly, start the FastAPI server
 if __name__ == "__main__":

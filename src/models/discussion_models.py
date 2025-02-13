@@ -136,4 +136,10 @@ class PersonaResponse(BaseModel):
 
 class ReplanResponse(BaseModel):
     updated_plan: DiscussionPlan
-    messages: List[Dict[str, str]] 
+    messages: List[Dict[str, str]]
+
+class DirectHumanResponse(BaseModel):
+    answer: Dict[str, Any] = {
+        "content": str,
+        "status": Literal["created"]
+    } 
